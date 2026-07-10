@@ -210,7 +210,9 @@ export interface DestinationAnalysis {
   summary: string;
   reasons: string[];
   factors: SafetyFactor[];
-  inputs: RouteInputs;
+  inputs: any;
+  latitude?: number;
+  longitude?: number;
 }
 
 export const destinations: DestinationAnalysis[] = [

@@ -6,6 +6,7 @@ import { PhoneFrame } from "@/components/safesphere/phone-frame";
 import { MapBackground } from "@/components/safesphere/map-background";
 import { SafetyRing } from "@/components/safesphere/safety-ring";
 import { RiskBadge } from "@/components/safesphere/risk-badge";
+import { SafeSphereLogo } from "@/components/safesphere/logo";
 
 export const Route = createFileRoute("/")({
   component: Landing,
@@ -24,12 +25,7 @@ function Landing() {
         <div className="relative h-[46%] min-h-[340px] overflow-hidden">
           <MapBackground route />
           <div className="absolute inset-x-0 top-0 flex items-center justify-between px-6 pt-7">
-            <div className="flex items-center gap-2">
-              <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-glow)]">
-                <ShieldCheck className="h-5 w-5" />
-              </span>
-              <span className="font-display text-lg font-extrabold">SafeSphere</span>
-            </div>
+            <SafeSphereLogo />
             <span className="bg-card border border-border rounded-full px-3 py-1 text-[11px] font-semibold text-muted-foreground shadow-[var(--shadow-soft)]">
               by IgniteX
             </span>

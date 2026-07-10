@@ -12,10 +12,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { MobileShell } from "@/components/safesphere/mobile-shell";
 import { RiskBadge } from "@/components/safesphere/risk-badge";
-import { dataService } from "@/lib/data-service";
+import { dataService, type EvidenceItem } from "@/lib/data-service";
+import { storageService } from "@/lib/storage-service";
+import { SafetyMap } from "@/components/safesphere/safety-map";
 import { simulationStore, useSimulationState } from "@/lib/simulation-service";
 import {
-  riskMeta, type EvidenceItem, type ReportKind, type ScanResult,
+  riskMeta, type ReportKind, type ScanResult,
 } from "@/lib/mock-data";
 
 export const Route = createFileRoute("/_authenticated/vault")({
@@ -23,7 +25,7 @@ export const Route = createFileRoute("/_authenticated/vault")({
   component: SafetyHub,
 });
 
-const typeIcon: Record<EvidenceItem["type"], typeof Mic> = {
+const typeIcon: Record<"audio" | "video" | "photo" | "location" | "report", typeof Mic> = {
   audio: Mic,
   video: Video,
   photo: ImageIcon,
@@ -80,7 +82,22 @@ function SafetyHub() {
 }
 
 function EvidenceVault() {
-  const evidenceItems: EvidenceItem[] = []; // Replaced mock with empty array
+  const qc = useQueryClient();
+  const evidenceQuery = useQuery({
+    queryKey: ["evidence-items"],
+    queryFn: dataService.getEvidenceItems,
+  });
+
+  const evidenceItems = evidenceQuery.data ?? [];
+
+  const handleDownload = async (storagePath: string) => {
+    try {
+      const url = await storageService.getEvidence(storagePath);
+      window.open(url, "_blank");
+    } catch {
+      toast.error("Failed to generate secure access URL");
+    }
+  };
 
   return (
     <div>
@@ -97,27 +114,57 @@ function EvidenceVault() {
       </div>
 
       <p className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stored evidence</p>
-      {evidenceItems.length === 0 ? (
+      {evidenceQuery.isLoading ? (
+        <div className="bg-card border border-border shadow-[var(--shadow-soft)] flex items-center justify-center gap-2 rounded-2xl p-6 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin text-primary mr-2" /> Loading evidence vault…
+        </div>
+      ) : evidenceItems.length === 0 ? (
         <div className="bg-card border border-border shadow-[var(--shadow-soft)] flex flex-col items-center justify-center gap-2 rounded-2xl p-6 text-sm text-muted-foreground text-center">
           <Lock className="h-8 w-8 text-muted/30 mb-2" />
-          <p>No actual saved evidence</p>
+          <p>No evidence saved yet</p>
         </div>
       ) : (
         <div className="space-y-2.5">
           {evidenceItems.map((item) => {
-            const Icon = typeIcon[item.type];
+            const getEvidenceType = (mimeType: string) => {
+              const t = mimeType.toLowerCase();
+              if (t.includes("audio")) return "audio";
+              if (t.includes("video")) return "video";
+              if (t.includes("image") || t.includes("photo")) return "photo";
+              if (t.includes("location") || t.includes("geo")) return "location";
+              return "report";
+            };
+
+            const type = getEvidenceType(item.fileType);
+            const Icon = typeIcon[type] || FileText;
+            const sizeStr = item.sizeBytes
+              ? `${(item.sizeBytes / 1024).toFixed(1)} KB`
+              : "Unknown size";
+            const dateStr = new Date(item.createdAt).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+
             return (
-              <div key={item.id} className="bg-card border border-border shadow-[var(--shadow-soft)] flex items-center gap-3 rounded-2xl p-3.5">
+              <div
+                key={item.id}
+                onClick={() => item.storagePath && handleDownload(item.storagePath)}
+                className={`bg-card border border-border shadow-[var(--shadow-soft)] flex items-center gap-3 rounded-2xl p-3.5 ${
+                  item.storagePath ? "cursor-pointer hover:bg-accent/40 transition-colors" : ""
+                }`}
+              >
                 <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary/15 text-foreground">
                   <Icon className="h-5 w-5" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold">{item.title}</p>
-                  <p className="truncate text-xs text-muted-foreground">{item.time} · {item.location}</p>
+                  <p className="truncate text-sm font-bold">{item.filename}</p>
+                  <p className="truncate text-xs text-muted-foreground">{dateStr} · {item.isEncrypted ? "Encrypted" : "Secured"}</p>
                 </div>
-                <div className="flex flex-col items-end gap-1">
-                  <Lock className="h-4 w-4 text-safe" />
-                  <span className="text-[10px] text-muted-foreground">{item.size}</span>
+                <div className="flex flex-col items-end gap-1" onClick={(e) => e.stopPropagation()}>
+                  <Lock className={`h-4 w-4 ${item.isLocked ? "text-safe" : "text-muted-foreground"}`} />
+                  <span className="text-[10px] text-muted-foreground">{sizeStr}</span>
                 </div>
               </div>
             );
@@ -314,12 +361,12 @@ function IncidentHistorySection() {
       ) : (
         <div className="space-y-2.5">
           {(incidentsQuery.data ?? []).map((rec) => (
-            <div key={rec.id} className="bg-card border border-border shadow-[var(--shadow-soft)] rounded-2xl p-3.5">
+            <div key={rec.id} className="bg-card border border-border shadow-[var(--shadow-soft)] rounded-2xl p-3.5 space-y-3">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-bold">Incident {rec.code}</p>
                 <RiskBadge risk={rec.status} />
               </div>
-              <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+              <div className="grid grid-cols-3 gap-2 text-[11px]">
                 <div>
                   <p className="text-muted-foreground">Date</p>
                   <p className="font-semibold text-foreground">{rec.date}</p>
@@ -333,6 +380,16 @@ function IncidentHistorySection() {
                   <p className="inline-flex items-center gap-1 font-semibold text-safe"><Lock className="h-3 w-3" />{rec.evidence}</p>
                 </div>
               </div>
+              {rec.latitude && rec.longitude && (
+                <div className="h-28 rounded-xl overflow-hidden mt-2 border border-border/60">
+                  <SafetyMap
+                    latitude={rec.latitude}
+                    longitude={rec.longitude}
+                    risk={rec.status}
+                    message={`Incident ${rec.code}`}
+                  />
+                </div>
+              )}
             </div>
           ))}
         </div>

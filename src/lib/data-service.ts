@@ -1,13 +1,10 @@
 // ============================================================================
 // SafeSphere data-access layer.
 //
-// The ONLY seam the app uses to read/write domain data. It now talks to
-// the backend (Supabase) using the browser client, so every read/write is
-// scoped to the signed-in user by Row Level Security. Components and routes
-// call this service — they never touch Supabase or the mock arrays directly.
-//
-// Demo-mode fallback: when a user has no rows yet, reads return the curated
-// mock data so the app still looks alive for a first-time / demo account.
+// The ONLY seam the app uses to read/write domain data. Talks to Supabase
+// using the browser client; every read/write is scoped to the signed-in user
+// by Row Level Security. Components and routes call this service — they never
+// touch Supabase directly.
 //
 // Entity → Supabase table mapping:
 //   Profile          → profiles
@@ -15,10 +12,13 @@
 //   SafetySession    → safety_sessions
 //   Incident         → incidents
 //   ThreatScan       → threat_scans
+//   EvidenceItem     → evidence_items
 // ============================================================================
 
 import { supabase } from "@/integrations/supabase/client";
 import { analyzeThreat } from "./threat-scan.functions";
+
+const db = supabase as any;
 import {
   analyzeMessage,
   type GuardianMember,
@@ -36,6 +36,21 @@ export interface Profile {
   email: string;
   address: string;
 }
+
+/** Metadata record for an evidence item. No raw binary data is stored here. */
+export interface EvidenceItem {
+  id: string;
+  filename: string;
+  fileType: string;
+  sizeBytes: number | null;
+  storagePath: string | null;
+  incidentId: string | null;
+  sessionId: string | null;
+  isEncrypted: boolean;
+  isLocked: boolean;
+  createdAt: string;
+}
+
 export type GuardianContact = GuardianMember;
 export type { SafetySession, IncidentRecord, ScanResult };
 
@@ -91,7 +106,7 @@ function riskFromScan(score: number): RiskLevel {
 
 // ── Profile ──────────────────────────────────────────────────────────────────
 async function ensureProfile(uid: string): Promise<Profile> {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from("profiles")
     .select("full_name, phone, email, address, created_at")
     .eq("user_id", uid)
@@ -101,7 +116,7 @@ async function ensureProfile(uid: string): Promise<Profile> {
 
   if (data && data.length > 0) {
     const profile = data.reduce(
-      (merged, row) => ({
+      (merged: any, row: any) => ({
         full_name: merged.full_name || row.full_name || "",
         phone: merged.phone || row.phone || "",
         email: merged.email || row.email || "",
@@ -140,14 +155,14 @@ export const dataService = {
       address: patch.address,
     };
 
-    const { count, error } = await supabase
+    const { count, error } = await db
       .from("profiles")
       .update(profile, { count: "exact" })
       .eq("user_id", uid);
     if (error) throw error;
     if ((count ?? 0) > 0) return;
 
-    const { error: insertError } = await supabase
+    const { error: insertError } = await db
       .from("profiles")
       .insert({ user_id: uid, ...profile });
     if (insertError) throw insertError;
@@ -157,7 +172,7 @@ export const dataService = {
   getGuardianContacts: async (): Promise<GuardianContact[]> => {
     const uid = await currentUserId();
     if (!uid) return [];
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("guardian_contacts")
       .select("id, name, relationship, phone, priority")
       .eq("user_id", uid)
@@ -165,7 +180,7 @@ export const dataService = {
       .order("created_at", { ascending: true });
     if (error) throw error;
     if (!data) return [];
-    return data.map((g) => ({
+    return data.map((g: any) => ({
       id: g.id,
       name: g.name,
       role: g.relationship || "Trusted Guardian",
@@ -178,7 +193,7 @@ export const dataService = {
   addGuardianContact: async (input: { name: string; role: string; phone: string }): Promise<void> => {
     const uid = await currentUserId();
     if (!uid) return;
-    const { error } = await supabase.from("guardian_contacts").insert({
+    const { error } = await db.from("guardian_contacts").insert({
       user_id: uid,
       name: input.name,
       relationship: input.role,
@@ -190,7 +205,7 @@ export const dataService = {
   updateGuardianContact: async (id: string, input: { name: string; role: string }): Promise<void> => {
     const uid = await currentUserId();
     if (!uid) return;
-    const { error } = await supabase
+    const { error } = await db
       .from("guardian_contacts")
       .update({ name: input.name, relationship: input.role })
       .eq("id", id)
@@ -201,7 +216,7 @@ export const dataService = {
   deleteGuardianContact: async (id: string): Promise<void> => {
     const uid = await currentUserId();
     if (!uid) return;
-    const { error } = await supabase
+    const { error } = await db
       .from("guardian_contacts")
       .delete()
       .eq("id", id)
@@ -213,14 +228,14 @@ export const dataService = {
   getSafetySessions: async (): Promise<SafetySession[]> => {
     const uid = await currentUserId();
     if (!uid) return [];
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("safety_sessions")
-      .select("id, destination, started_at, ended_at, safety_score, risk_level, status, explanation")
+      .select("id, destination, started_at, ended_at, safety_score, risk_level, status, explanation, latitude, longitude")
       .eq("user_id", uid)
       .order("started_at", { ascending: false });
     if (error) throw error;
     if (!data) return [];
-    return data.map((s) => ({
+    return data.map((s: any) => ({
       id: s.id,
       destination: s.destination ?? "Journey",
       startedAt: relTime(s.started_at),
@@ -229,6 +244,8 @@ export const dataService = {
       risk: (s.risk_level as RiskLevel) ?? scoreToRisk(s.safety_score),
       status: (s.status as SessionStatus) ?? "active",
       explanation: s.explanation ?? undefined,
+      latitude: s.latitude ?? undefined,
+      longitude: s.longitude ?? undefined,
     }));
   },
 
@@ -243,10 +260,12 @@ export const dataService = {
     safetyScore: number;
     risk: RiskLevel;
     explanation?: string;
+    latitude?: number;
+    longitude?: number;
   }): Promise<void> => {
     const uid = await currentUserId();
     if (!uid) return;
-    const { error } = await supabase.from("safety_sessions").insert({
+    const { error } = await db.from("safety_sessions").insert({
       user_id: uid,
       destination: input.destination,
       start_location: input.startLocation ?? null,
@@ -254,6 +273,8 @@ export const dataService = {
       risk_level: input.risk,
       explanation: input.explanation ?? null,
       status: "active",
+      latitude: input.latitude ?? null,
+      longitude: input.longitude ?? null,
     });
     if (error) throw error;
   },
@@ -261,7 +282,7 @@ export const dataService = {
   endSession: async (id: string, status: SessionStatus): Promise<void> => {
     const uid = await currentUserId();
     if (!uid) return;
-    const { error } = await supabase
+    const { error } = await db
       .from("safety_sessions")
       .update({ status, ended_at: new Date().toISOString() })
       .eq("id", id)
@@ -273,48 +294,63 @@ export const dataService = {
   getIncidents: async (): Promise<IncidentRecord[]> => {
     const uid = await currentUserId();
     if (!uid) return [];
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("incidents")
-      .select("id, risk_level, location, status, created_at")
+      .select("id, risk_level, location, status, created_at, latitude, longitude")
       .eq("user_id", uid)
       .order("created_at", { ascending: false });
     if (error) throw error;
     if (!data) return [];
-    return data.map((i) => ({
+    return data.map((i: any) => ({
       id: i.id,
       code: `#${i.id.slice(0, 4).toUpperCase()}`,
       date: relTime(i.created_at),
       location: i.location ?? "Saved",
       evidence: "Protected",
       status: (i.risk_level as RiskLevel) ?? "medium",
+      latitude: i.latitude ?? undefined,
+      longitude: i.longitude ?? undefined,
     }));
   },
 
-  createIncident: async (input: { risk: RiskLevel; location?: string; sessionId?: string }): Promise<void> => {
+  createIncident: async (input: {
+    risk: RiskLevel;
+    location?: string;
+    sessionId?: string;
+    latitude?: number;
+    longitude?: number;
+  }): Promise<string | null> => {
     const uid = await currentUserId();
-    if (!uid) return;
-    const { error } = await supabase.from("incidents").insert({
-      user_id: uid,
-      risk_level: input.risk,
-      location: input.location ?? "Saved",
-      session_id: input.sessionId ?? null,
-      status: "open",
-    });
+    if (!uid) return null;
+    const { data, error } = await db
+      .from("incidents")
+      .insert({
+        user_id: uid,
+        risk_level: input.risk,
+        location: input.location ?? "Saved",
+        session_id: input.sessionId ?? null,
+        status: "open",
+        latitude: input.latitude ?? null,
+        longitude: input.longitude ?? null,
+      })
+      .select("id")
+      .single();
     if (error) throw error;
+    return (data as Record<string, unknown>)?.id as string ?? null;
   },
 
   // threat_scans --------------------------------------------------------------
   getThreatScans: async (): Promise<ScanResult[]> => {
     const uid = await currentUserId();
     if (!uid) return [];
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("threat_scans")
       .select("id, message, risk_score, analysis, created_at")
       .eq("user_id", uid)
       .order("created_at", { ascending: false });
     if (error) throw error;
     if (!data) return [];
-    return data.map((s) => ({
+    return data.map((s: any) => ({
       id: s.id,
       message: s.message,
       threat: riskFromScan(s.risk_score ?? 0),
@@ -348,5 +384,95 @@ export const dataService = {
       const analysis = analyzeMessage(text);
       return { ...analysis, id: "live", time: "Just now" };
     }
+  },
+
+  // evidence_items ------------------------------------------------------------
+  // Stores metadata only. Raw files live in Supabase Storage (future).
+  getEvidenceItems: async (): Promise<EvidenceItem[]> => {
+    const uid = await currentUserId();
+    if (!uid) return [];
+    const { data, error } = await db
+      .from("evidence_items")
+      .select("id, filename, file_type, size_bytes, storage_path, incident_id, session_id, is_encrypted, is_locked, created_at")
+      .eq("user_id", uid)
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("[data-service] getEvidenceItems:", error.message);
+      return [];
+    }
+    if (!data) return [];
+    return (data as Array<Record<string, unknown>>).map((e) => ({
+      id: e.id as string,
+      filename: e.filename as string,
+      fileType: e.file_type as string,
+      sizeBytes: (e.size_bytes as number | null) ?? null,
+      storagePath: (e.storage_path as string | null) ?? null,
+      incidentId: (e.incident_id as string | null) ?? null,
+      sessionId: (e.session_id as string | null) ?? null,
+      isEncrypted: (e.is_encrypted as boolean) ?? false,
+      isLocked: (e.is_locked as boolean) ?? true,
+      createdAt: e.created_at as string,
+    }));
+  },
+
+  /**
+   * Register evidence metadata when a capture is initiated.
+   * `storagePath` is null until the file is actually uploaded to Supabase Storage.
+   *
+   * TODO: After upload, call updateEvidenceStoragePath() with the real bucket path.
+   */
+  createEvidenceItem: async (input: {
+    filename: string;
+    fileType: string;
+    incidentId?: string;
+    sessionId?: string;
+  }): Promise<string | null> => {
+    const uid = await currentUserId();
+    if (!uid) return null;
+    const { data, error } = await db
+      .from("evidence_items")
+      .insert({
+        user_id: uid,
+        filename: input.filename,
+        file_type: input.fileType,
+        incident_id: input.incidentId ?? null,
+        session_id: input.sessionId ?? null,
+        is_encrypted: false, // Will be true once encrypted upload is implemented
+        is_locked: true,
+      })
+      .select("id")
+      .single();
+    if (error) {
+      console.error("[data-service] createEvidenceItem:", error.message);
+      return null;
+    }
+    return (data as Record<string, unknown>)?.id as string ?? null;
+  },
+
+  /**
+   * Update the storage path after a successful file upload to Supabase Storage.
+   * TODO: Implement when Supabase Storage bucket is configured.
+   */
+  updateEvidenceStoragePath: async (id: string, storagePath: string, sizeBytes: number): Promise<void> => {
+    const uid = await currentUserId();
+    if (!uid) return;
+    const { error } = await db
+      .from("evidence_items")
+      .update({ storage_path: storagePath, size_bytes: sizeBytes })
+      .eq("id", id)
+      .eq("user_id", uid);
+    if (error) console.error("[data-service] updateEvidenceStoragePath:", error.message);
+  },
+
+  deleteEvidenceItem: async (id: string): Promise<void> => {
+    const uid = await currentUserId();
+    if (!uid) return;
+    // TODO: Also delete the file from Supabase Storage when storagePath is set.
+    const { error } = await db
+      .from("evidence_items")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", uid);
+    if (error) throw error;
   },
 };

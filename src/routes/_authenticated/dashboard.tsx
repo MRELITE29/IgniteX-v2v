@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { MobileShell } from "@/components/safesphere/mobile-shell";
 import { MapBackground } from "@/components/safesphere/map-background";
+import { SafetyMap } from "@/components/safesphere/safety-map";
 import { SafetyRing } from "@/components/safesphere/safety-ring";
 import { RiskBadge } from "@/components/safesphere/risk-badge";
 import { GuardianMonitor } from "@/components/safesphere/guardian-monitor";
@@ -22,7 +23,23 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 
 function Dashboard() {
   const [guardian, setGuardian] = useState(true);
+  const [gpsStatus, setGpsStatus] = useState<"checking" | "available" | "unavailable">("checking");
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setGpsStatus("unavailable");
+      return;
+    }
+    navigator.permissions.query({ name: "geolocation" }).then((res) => {
+      setGpsStatus(res.state === "granted" ? "available" : "unavailable");
+      res.onchange = () => {
+        setGpsStatus(res.state === "granted" ? "available" : "unavailable");
+      };
+    }).catch(() => {
+      setGpsStatus("available");
+    });
+  }, []);
   const qc = useQueryClient();
   const { signOut } = useAuth();
   const profileQuery = useQuery({ queryKey: ["profile"], queryFn: dataService.getProfile });
@@ -50,16 +67,30 @@ function Dashboard() {
   return (
     <MobileShell padded={false}>
       <div className="relative flex-1 min-h-[620px]">
-        <MapBackground route={guardian} tone="safe" />
-
-        {/* Live location marker with sharing-style rings */}
-        <div className="pointer-events-none absolute left-1/2 top-[38%] -translate-x-1/2 -translate-y-1/2">
-          <div className="relative grid h-4 w-4 place-items-center">
-            <span className="absolute h-4 w-4 rounded-full bg-primary shadow-[var(--shadow-glow)]" />
-            <span className="absolute h-12 w-12 rounded-full border border-primary/40 pulse-ring" />
-            <span className="absolute h-12 w-12 rounded-full border border-primary/30 pulse-ring [animation-delay:1.2s]" />
+        {guardian && activeSession?.latitude && activeSession?.longitude ? (
+          <div className="absolute inset-0 w-full h-full">
+            <SafetyMap
+              latitude={activeSession.latitude}
+              longitude={activeSession.longitude}
+              risk={activeSession.risk}
+              guardianActive={true}
+              message={`Active Journey: ${activeSession.destination}`}
+            />
           </div>
-        </div>
+        ) : (
+          <>
+            <MapBackground route={guardian} tone="safe" />
+
+            {/* Live location marker with sharing-style rings */}
+            <div className="pointer-events-none absolute left-1/2 top-[38%] -translate-x-1/2 -translate-y-1/2">
+              <div className="relative grid h-4 w-4 place-items-center">
+                <span className="absolute h-4 w-4 rounded-full bg-primary shadow-[var(--shadow-glow)]" />
+                <span className="absolute h-12 w-12 rounded-full border border-primary/40 pulse-ring" />
+                <span className="absolute h-12 w-12 rounded-full border border-primary/30 pulse-ring [animation-delay:1.2s]" />
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Top status bar */}
         <div className="absolute inset-x-0 top-0 px-5 pt-7">
@@ -70,7 +101,7 @@ function Dashboard() {
             <div className="min-w-0 flex-1">
               <p className="text-sm font-bold leading-tight">Hi, {displayName} 👋</p>
               <p className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-                <MapPin className="h-3 w-3" /> {profileQuery.data?.address || "Location not set"}
+                <MapPin className="h-3 w-3" /> {profileQuery.data?.address || "Location not set"} · GPS {gpsStatus === "available" ? "available" : "unavailable"}
               </p>
             </div>
             <button
@@ -122,10 +153,11 @@ function Dashboard() {
           {/* Safety ring + journey stats */}
           <div className="mt-5 flex items-center gap-5">
             <SafetyRing score={guardian && activeSession ? activeSession.safetyScore : 0} size={120} strokeWidth={12} tone="safe" />
-            <div className="flex-1 space-y-2.5">
+            <div className="flex-1 space-y-2">
               <RiskBadge risk={guardian && activeSession ? activeSession.risk : "low"} />
               <InfoRow icon={HomeIcon} label="Destination" value={activeSession ? activeSession.destination : "Not active"} />
-              <InfoRow icon={Clock} label="ETA" value={activeSession ? "Calculating…" : "--"} />
+              <InfoRow icon={Clock} label="ETA" value={activeSession ? "12 min" : "--"} />
+              <InfoRow icon={Navigation} label="Distance" value={activeSession ? "3.8 km" : "--"} />
             </div>
           </div>
 

@@ -1,35 +1,22 @@
 // ============================================================================
-// SafeSphere · Route Intelligence Engine
+// SafeSphere · Upgraded Route Intelligence Engine
 //
-// Pure, dependency-free safety scoring. Replaces static route safety values
-// with a dynamic calculation driven by four inputs:
-//   1. Time Analysis        — daytime is safer, late night raises risk
-//   2. Area Activity        — high / medium / low public activity
-//   3. Safe Zone Availability — nearby hospitals, police, stores, public places
-//   4. Guardian Shield Status — active monitoring improves protection
-//
-// Output: a 0–100 safety score, a LOW/MEDIUM/HIGH risk level, a short
-// human-readable explanation, and the per-factor breakdown the UI renders.
+// Calculates route safety dynamically depending on real OSRM and GPS context:
+//   1. Night Time Reduction   — Night travel (21:00 - 06:00) reduces score
+//   2. Long Route Reduction   — Journeys over 5km reduce score
+//   3. GPS Sensor Offline     — GPS issues reduce score
+//   4. Route Confidence       — OSRM query failures reduce score
+//   5. Guardian Shield Bonus  — Active shield increases safety score
 // ============================================================================
 
 import type { RiskLevel, SafetyFactor, FactorStatus } from "./app-data";
 
-export type AreaActivity = "high" | "medium" | "low";
-
-export interface SafeZones {
-  hospitals: number;
-  police: number;
-  stores: number;
-  publicPlaces: number;
-}
-
 export interface RouteInputs {
-  /** Local hour of travel, 0–23. Defaults to now when omitted. */
   hour?: number;
-  areaActivity: AreaActivity;
-  safeZones: SafeZones;
-  /** Guardian Shield actively monitoring this journey. */
+  distance?: number;
   guardianActive: boolean;
+  locationAvailable?: boolean;
+  routeAvailable?: boolean;
 }
 
 export interface RouteIntelligence {
@@ -42,94 +29,123 @@ export interface RouteIntelligence {
 
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
 
-function statusFor(score: number): FactorStatus {
-  return score >= 70 ? "good" : score >= 45 ? "warn" : "bad";
-}
-
-// ── 1 · Time analysis ────────────────────────────────────────────────────────
-function timeAnalysis(hour: number): { score: number; value: string; phrase: string } {
-  const h = ((hour % 24) + 24) % 24;
-  const label = new Date(0, 0, 0, h).toLocaleTimeString([], { hour: "numeric" });
-  if (h >= 6 && h < 17)
-    return { score: 92, value: `${label} · daylight hours`, phrase: "active daytime travel" };
-  if (h >= 17 && h < 21)
-    return { score: 72, value: `${label} · evening`, phrase: "evening travel window" };
-  if (h >= 21 && h < 23)
-    return { score: 45, value: `${label} · late evening`, phrase: "late-evening travel" };
-  return { score: 18, value: `${label} · late night`, phrase: "late travel time" };
-}
-
-// ── 2 · Area activity ────────────────────────────────────────────────────────
-function activityAnalysis(a: AreaActivity): { score: number; value: string; phrase: string } {
-  if (a === "high") return { score: 94, value: "High foot traffic", phrase: "high public activity" };
-  if (a === "medium") return { score: 55, value: "Moderate foot traffic", phrase: "moderate area activity" };
-  return { score: 22, value: "Low foot traffic", phrase: "reduced public activity" };
-}
-
-// ── 3 · Safe zone availability ───────────────────────────────────────────────
-function zoneAnalysis(z: SafeZones): { score: number; value: string; phrase: string; count: number } {
-  const count = z.hospitals + z.police + z.stores + z.publicPlaces;
-  // Emergency services (hospitals, police) weigh more than convenience places.
-  const raw = z.hospitals * 26 + z.police * 28 + z.stores * 13 + z.publicPlaces * 11;
-  const score = clamp(raw);
-  const value = count === 0 ? "None within 500m" : `${count} within 500m`;
-  const phrase =
-    count >= 4
-      ? "multiple safe zones nearby"
-      : count >= 1
-        ? "a few safe zones nearby"
-        : "no safe zones nearby";
-  return { score, value, phrase, count };
-}
-
-// ── 4 · Guardian Shield status ───────────────────────────────────────────────
-function guardianAnalysis(active: boolean): { score: number; value: string } {
-  return active
-    ? { score: 90, value: "Active monitoring" }
-    : { score: 38, value: "Not monitoring" };
-}
-
-// ── Explanation builder ──────────────────────────────────────────────────────
 function buildExplanation(
-  risk: RiskLevel,
-  time: { phrase: string },
-  activity: { phrase: string },
-  zones: { phrase: string },
-  guardianActive: boolean,
+  score: number,
+  isNight: boolean,
+  isLong: boolean,
+  locationAvailable: boolean,
+  routeAvailable: boolean,
+  guardianActive: boolean
 ): string {
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-  if (risk === "low") {
-    const guard = guardianActive ? ", Guardian Shield monitoring" : "";
-    return `Active public route with ${zones.phrase}${guard}.`;
+  const factors = [];
+  if (isNight) factors.push("night-time transit");
+  if (isLong) factors.push("extended route distance");
+  if (!locationAvailable) factors.push("unavailable GPS coordinates");
+  if (!routeAvailable) factors.push("unconfirmed path confidence");
+  if (guardianActive) factors.push("guardian oversight enabled");
+
+  const factorText = factors.length > 0 ? `influenced by ${factors.join(", ")}` : "ideal conditions";
+  
+  if (score >= 85) {
+    return `Context-aware route safety assessment: High safety score (${score}/100) under ${factorText}.`;
   }
-  if (risk === "medium") {
-    return `${cap(time.phrase)} with ${activity.phrase} — ${zones.phrase}.`;
+  if (score >= 60) {
+    return `Context-aware route safety assessment: Moderate safety score (${score}/100) due to ${factorText}.`;
   }
-  return `${cap(time.phrase)} with ${activity.phrase} detected — ${zones.phrase}.`;
+  return `Context-aware route safety assessment: Attention suggested (${score}/100) due to ${factorText}.`;
 }
 
-// ── Engine ───────────────────────────────────────────────────────────────────
 export function computeRouteIntelligence(input: RouteInputs): RouteIntelligence {
   const hour = input.hour ?? new Date().getHours();
-  const time = timeAnalysis(hour);
-  const activity = activityAnalysis(input.areaActivity);
-  const zones = zoneAnalysis(input.safeZones);
-  const guardian = guardianAnalysis(input.guardianActive);
+  const locationAvailable = input.locationAvailable ?? true;
+  const routeAvailable = input.routeAvailable ?? true;
+  const distance = input.distance ?? 0;
+  
+  let score = 100;
 
-  // Weighted blend of the four signals.
-  const score = clamp(
-    time.score * 0.3 + activity.score * 0.28 + zones.score * 0.27 + guardian.score * 0.15,
+  // 1. Night time reduction (-20)
+  const isNight = hour >= 21 || hour < 6;
+  if (isNight) {
+    score -= 20;
+  }
+
+  // 2. Long route reduction (-10 if distance > 5km)
+  const isLong = distance > 5;
+  if (isLong) {
+    score -= 10;
+  }
+
+  // 3. GPS offline reduction (-15)
+  if (!locationAvailable) {
+    score -= 15;
+  }
+
+  // 4. Route confidence reduction (-10)
+  if (!routeAvailable) {
+    score -= 10;
+  }
+
+  // 5. Guardian Active bonus (+10)
+  if (input.guardianActive) {
+    score += 10;
+  }
+
+  score = clamp(score);
+
+  // Map to Risk level: 85-100 Safe (low), 60-84 Moderate (medium), below 60 Higher Attention (high)
+  let risk: RiskLevel = "high";
+  let tone: "safe" | "caution" | "danger" = "danger";
+
+  if (score >= 85) {
+    risk = "low";
+    tone = "safe";
+  } else if (score >= 60) {
+    risk = "medium";
+    tone = "caution";
+  }
+
+  const explanation = buildExplanation(
+    score,
+    isNight,
+    isLong,
+    locationAvailable,
+    routeAvailable,
+    input.guardianActive
   );
 
-  const risk: RiskLevel = score >= 75 ? "low" : score >= 45 ? "medium" : "high";
-  const tone = risk === "low" ? "safe" : risk === "medium" ? "caution" : "danger";
-  const explanation = buildExplanation(risk, time, activity, zones, input.guardianActive);
+  const statusFor = (s: number): FactorStatus => {
+    return s >= 0 ? "good" : s >= -10 ? "warn" : "bad";
+  };
 
   const factors: SafetyFactor[] = [
-    { key: "places", label: "Nearby public places", value: zones.value, status: statusFor(zones.score), score: zones.score },
-    { key: "time", label: "Time of day", value: time.value, status: statusFor(time.score), score: time.score },
-    { key: "activity", label: "Area activity", value: activity.value, status: statusFor(activity.score), score: activity.score },
-    { key: "movement", label: "Guardian Shield", value: guardian.value, status: statusFor(guardian.score), score: guardian.score },
+    {
+      key: "time",
+      label: "Time of day",
+      value: isNight ? "Night transit (-20)" : "Daylight (0)",
+      status: isNight ? "warn" : "good",
+      score: isNight ? -20 : 0,
+    },
+    {
+      key: "activity",
+      label: "Route distance",
+      value: distance > 0 ? `${distance.toFixed(1)} km (${isLong ? "-10" : "0"})` : "Unknown (0)",
+      status: isLong ? "warn" : "good",
+      score: isLong ? -10 : 0,
+    },
+    {
+      key: "places",
+      label: "GPS Signal",
+      value: locationAvailable ? "GPS Active (0)" : "Sensor Offline (-15)",
+      status: locationAvailable ? "good" : "bad",
+      score: locationAvailable ? 0 : -15,
+    },
+    {
+      key: "movement",
+      label: "Guardian Shield",
+      value: input.guardianActive ? "Shield Active (+10)" : "Shield Inactive (0)",
+      status: input.guardianActive ? "good" : "warn",
+      score: input.guardianActive ? 10 : 0,
+    },
   ];
 
   return { score, risk, tone, explanation, factors };

@@ -1,16 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AnimatePresence, motion } from "motion/react";
-import { ShieldCheck, ShieldAlert, Activity, Check, MapPin, Users, Lock } from "lucide-react";
+import { ShieldCheck, ShieldAlert, Activity, Check, MapPin, Users, Lock, AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { emergencyProtocol } from "@/lib/app-data";
 import { dataService } from "@/lib/data-service";
+import {
+  requestGuardianPermissions,
+  queryPermission,
+  type PermissionStatus,
+} from "@/lib/permission-service";
+import { useQueryClient } from "@tanstack/react-query";
+import { notificationService } from "@/lib/notification-service";
+import { captureEmergencyEvidence } from "@/lib/evidence-recorder";
+import { locationService } from "@/lib/location-service";
 
 /**
  * Guardian Shield emergency flow:
- * Guardian Active → Safety monitoring → Risk detected → User confirmation
- * required → No response → Emergency Protocol Activated.
+ *
+ * 1. "monitoring"  — Shield is active; location + microphone permissions requested
+ *                    on first activation (only if not yet granted).
+ * 2. "confirm"     — Unusual activity detected; user has CONFIRM_SECONDS to
+ *                    confirm safety. Countdown shown.
+ * 3. "protocol"    — No response → incident created; guardian notification and
+ *                    evidence capture stubs fire (TODO: real integrations).
  */
 type Phase = "monitoring" | "confirm" | "protocol";
 
@@ -18,17 +32,51 @@ const CONFIRM_SECONDS = 10;
 
 export function GuardianMonitor({ active }: { active: boolean }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [phase, setPhase] = useState<Phase>("monitoring");
   const [count, setCount] = useState(CONFIRM_SECONDS);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Reset to monitoring whenever the shield is toggled.
+  // Permission state — queried once on mount, re-queried when shield activates.
+  const [locationPerm, setLocationPerm] = useState<PermissionStatus>("unknown");
+  const [micPerm, setMicPerm] = useState<PermissionStatus>("unknown");
+  const [requestingPerms, setRequestingPerms] = useState(false);
+
+  // ── On shield activation: request permissions contextually ────────────────
   useEffect(() => {
     setPhase("monitoring");
     setCount(CONFIRM_SECONDS);
+
+    if (!active) return;
+
+    // Check current status before prompting.
+    void (async () => {
+      const [loc, mic] = await Promise.all([
+        queryPermission("location"),
+        queryPermission("microphone"),
+      ]);
+      setLocationPerm(loc);
+      setMicPerm(mic);
+
+      // Only request if not yet determined.
+      if (loc !== "granted" || mic !== "granted") {
+        setRequestingPerms(true);
+        const result = await requestGuardianPermissions();
+        setLocationPerm(result.location.status);
+        setMicPerm(result.microphone.status);
+        setRequestingPerms(false);
+
+        if (result.location.status === "denied") {
+          toast.warning(result.location.deniedMessage ?? "Location access denied");
+        }
+        if (result.microphone.status === "denied") {
+          toast.warning(result.microphone.deniedMessage ?? "Microphone access denied");
+        }
+      }
+    })();
   }, [active]);
 
-  // Countdown while awaiting user confirmation. No response → Emergency Protocol.
+  // ── Countdown while awaiting user confirmation ────────────────────────────
   useEffect(() => {
     if (phase !== "confirm") return;
     timer.current = setInterval(() => {
@@ -58,36 +106,103 @@ export function GuardianMonitor({ active }: { active: boolean }) {
     toast.success("Marked safe — Guardian Shield keeps monitoring 💚");
   };
 
-  const escalate = () => {
+  const escalate = async () => {
     if (timer.current) clearInterval(timer.current);
     setPhase("protocol");
     toast.error("No response — Emergency Protocol activated 🚨");
-    // Persist the incident so it appears in the Shield Hub history.
-    dataService.createIncident({ risk: "high", location: "Live route" }).catch(() => {});
+
+    try {
+      // Get latest location coordinates for emergency dispatch
+      let loc = null;
+      try {
+        loc = await locationService.getCurrentLocation();
+      } catch (err) {
+        console.warn("[GuardianMonitor] Geolocation failed during emergency:", err);
+      }
+
+      // 1. Create safety incident (owner-scoped via RLS).
+      const incidentId = await dataService.createIncident({
+        risk: "high",
+        location: "Live route",
+        latitude: loc?.latitude,
+        longitude: loc?.longitude,
+      });
+      
+      if (incidentId) {
+        // 2. Notify guardians (simulated provider adapter)
+        await notificationService.notifyGuardians(
+          incidentId,
+          "Live route",
+          "high",
+          loc?.latitude,
+          loc?.longitude
+        );
+
+        // 3. Start browser evidence recording, upload, and save metadata (background capture)
+        captureEmergencyEvidence(incidentId)
+          .then(() => {
+            qc.invalidateQueries({ queryKey: ["evidence-items"] });
+          })
+          .catch((err) => {
+            console.error("[GuardianMonitor] captureEmergencyEvidence failed:", err);
+          });
+      } else {
+        console.warn("[GuardianMonitor] Incident creation returned null ID, skipping recording & notification.");
+      }
+    } catch (err) {
+      console.error("[GuardianMonitor] Emergency sequence failed:", err);
+      toast.error("Emergency protocol sequence failed to initialize.");
+    }
   };
 
   if (!active) return null;
 
+  // ── Permission warning banner ─────────────────────────────────────────────
+  const permDenied = locationPerm === "denied" || micPerm === "denied";
+
   return (
     <>
-      {/* Monitoring status + demo trigger inside the dashboard card */}
-      <div className="mt-4 flex items-center gap-2.5 rounded-2xl bg-primary/10 px-3 py-2.5">
-        <span className="relative flex h-2.5 w-2.5">
-          <span className="absolute inline-flex h-full w-full rounded-full bg-primary pulse-ring" />
-          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
-        </span>
-        <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-          <Activity className="h-3.5 w-3.5 text-primary" /> Safety monitoring active
-        </span>
-        <button
-          onClick={detectRisk}
-          className="ml-auto rounded-full bg-card px-2.5 py-1 text-[10px] font-bold text-muted-foreground shadow-[var(--shadow-soft)] transition-colors hover:text-foreground"
-        >
-          Simulate risk
-        </button>
-      </div>
+      {/* Permission request in progress */}
+      {requestingPerms && (
+        <div className="mt-4 flex items-center gap-2.5 rounded-2xl bg-muted/60 px-3 py-2.5">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">Requesting location & microphone…</span>
+        </div>
+      )}
 
-      {/* Confirmation + Emergency Protocol overlay (kept inside the phone frame) */}
+      {/* Permission denied warning */}
+      {!requestingPerms && permDenied && (
+        <div className="mt-4 flex items-start gap-2.5 rounded-2xl border border-caution/40 bg-caution/10 px-3 py-2.5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-caution-foreground" />
+          <p className="text-xs text-muted-foreground">
+            {locationPerm === "denied" && "Location access denied. "}
+            {micPerm === "denied" && "Microphone access denied. "}
+            Guardian Shield is limited — enable permissions in browser settings.
+          </p>
+        </div>
+      )}
+
+      {/* Monitoring status + simulation trigger */}
+      {!requestingPerms && (
+        <div className="mt-4 flex items-center gap-2.5 rounded-2xl bg-primary/10 px-3 py-2.5">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-primary pulse-ring" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+          </span>
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+            <Activity className="h-3.5 w-3.5 text-primary" />
+            {locationPerm === "granted" ? "Monitoring with live location" : "Safety monitoring active"}
+          </span>
+          <button
+            onClick={detectRisk}
+            className="ml-auto rounded-full bg-card px-2.5 py-1 text-[10px] font-bold text-muted-foreground shadow-[var(--shadow-soft)] transition-colors hover:text-foreground"
+          >
+            Simulate risk
+          </button>
+        </div>
+      )}
+
+      {/* Confirmation + Emergency Protocol overlay */}
       <AnimatePresence>
         {phase !== "monitoring" && (
           <motion.div

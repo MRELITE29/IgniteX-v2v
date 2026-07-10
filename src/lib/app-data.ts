@@ -60,6 +60,8 @@ export interface SafetySession {
   risk: RiskLevel;
   status: SessionStatus;
   explanation?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface IncidentRecord {
@@ -69,6 +71,8 @@ export interface IncidentRecord {
   location: string;
   evidence: string;
   status: RiskLevel;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface SafetyPreference {
@@ -91,12 +95,21 @@ export interface PermissionStatus {
   granted: boolean;
 }
 
+/**
+ * Returns permission statuses from the browser cache (localStorage).
+ * Import getCachedPermissions from permission-service in components that
+ * need live status. This array is kept for UI mapping only.
+ *
+ * NOTE: notifications status is not managed by permission-service yet
+ * (browser Notifications API requires different handling).
+ */
 export const permissionStatuses: PermissionStatus[] = [
-  { key: "location", label: "Location", granted: true },
-  { key: "camera", label: "Camera", granted: true },
-  { key: "microphone", label: "Microphone", granted: true },
-  { key: "notifications", label: "Notifications", granted: true },
+  { key: "location", label: "Location", granted: false },
+  { key: "camera", label: "Camera", granted: false },
+  { key: "microphone", label: "Microphone", granted: false },
+  { key: "notifications", label: "Notifications", granted: false },
 ];
+
 
 export type GuardianAvailability = "available" | "away" | "offline";
 

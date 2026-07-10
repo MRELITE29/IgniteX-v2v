@@ -20,7 +20,7 @@ import {
   availabilityMeta, shieldPermissions,
   type SafetyPreference,
 } from "@/lib/app-data";
-import { completionItems } from "@/lib/mock-data";
+import { getCachedPermissions } from "@/lib/permission-service";
 
 export const Route = createFileRoute("/_authenticated/profile")({
   head: () => ({ meta: [{ title: "Profile — SafeSphere" }] }),
@@ -171,11 +171,35 @@ function ProfileScreen() {
         </div>
       </header>
 
-      {/* Goal Gradient Effect — profile completion */}
+      {/* Safety profile completion — calculated dynamically from real data */}
       {(() => {
-        const done = completionItems.filter((i) => i.done);
-        const missing = completionItems.filter((i) => !i.done);
-        const pct = Math.round((done.length / completionItems.length) * 100);
+        const profile = profileQuery.data;
+        const perms = getCachedPermissions();
+        const allItems = [
+          {
+            key: "profile",
+            label: "Profile details",
+            done: !!(profile?.fullName && profile?.phone && profile?.email),
+          },
+          {
+            key: "guardians",
+            label: "Trusted Guardians",
+            done: circle.length > 0,
+          },
+          {
+            key: "location",
+            label: "Location Access",
+            done: perms.location === "granted",
+          },
+          {
+            key: "microphone",
+            label: "Microphone Access",
+            done: perms.microphone === "granted",
+          },
+        ];
+        const done = allItems.filter((i) => i.done);
+        const missing = allItems.filter((i) => !i.done);
+        const pct = Math.round((done.length / allItems.length) * 100);
         return (
           <div className="bg-card border border-border shadow-[var(--shadow-soft)] mt-5 rounded-[1.6rem] p-5">
             <div className="mb-1.5 flex items-center justify-between text-sm font-semibold">
@@ -380,15 +404,24 @@ function ProfileScreen() {
       <div className="bg-card border border-border shadow-[var(--shadow-soft)] grid grid-cols-2 gap-2.5 rounded-[1.6rem] p-4">
         {permissionStatuses.map((perm) => {
           const Icon = permIcon[perm.key];
+          // Use cached permission status (except notifications which is not currently cached)
+          const perms = getCachedPermissions();
+          const isGranted = perm.key === "notifications" ? false : perms[perm.key as keyof typeof perms] === "granted";
           return (
             <div key={perm.key} className="flex items-center gap-2.5 rounded-2xl bg-card/70 p-3">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary/15 text-foreground">
                 <Icon className="h-4 w-4" />
               </span>
               <span className="flex-1 text-sm font-semibold">{perm.label}</span>
-              <span className="grid h-5 w-5 place-items-center rounded-full bg-safe text-safe-foreground">
-                <Check className="h-3 w-3" strokeWidth={3} />
-              </span>
+              {isGranted ? (
+                <span className="grid h-5 w-5 place-items-center rounded-full bg-safe text-safe-foreground">
+                  <Check className="h-3 w-3" strokeWidth={3} />
+                </span>
+              ) : (
+                <span className="grid h-5 w-5 place-items-center rounded-full bg-muted text-muted-foreground">
+                  <span className="h-2 w-2 rounded-full bg-muted-foreground/50" />
+                </span>
+              )}
             </div>
           );
         })}

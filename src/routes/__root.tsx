@@ -80,31 +80,31 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "SafeSphere — AI-Powered Women Safety Companion" },
+      { title: "SafeSphere — AI Guardian Safety Companion" },
       {
         name: "description",
         content:
-          "SafeSphere turns your phone into an intelligent personal guardian with route intelligence, live safety scoring, and automated emergency response.",
+          "AI-powered personal safety companion with route intelligence, guardian protection, evidence vault, and threat detection.",
       },
       { name: "author", content: "IgniteX" },
-      { name: "theme-color", content: "#A6FF00" },
-      { property: "og:title", content: "SafeSphere — AI-Powered Women Safety Companion" },
+      { name: "theme-color", content: "#1ED760" },
+      { property: "og:title", content: "SafeSphere — AI Guardian Safety Companion" },
       {
         property: "og:description",
         content:
-          "SafeSphere turns your phone into an intelligent personal guardian with route intelligence, live safety scoring, and automated emergency response.",
+          "AI-powered personal safety companion with route intelligence, guardian protection, evidence vault, and threat detection.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "SafeSphere — AI-Powered Women Safety Companion" },
-      { name: "twitter:description", content: "SafeSphere turns your phone into an intelligent personal guardian with route intelligence, live safety scoring, and automated emergency response." },
+      { name: "twitter:title", content: "SafeSphere — AI Guardian Safety Companion" },
+      { name: "twitter:description", content: "AI-powered personal safety companion with route intelligence, guardian protection, evidence vault, and threat detection." },
     ],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       {

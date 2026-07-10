@@ -28,6 +28,9 @@ import { RiskBadge } from "@/components/safesphere/risk-badge";
 import { destinations, type DestinationAnalysis, type SafetyFactor } from "@/lib/mock-data";
 import { computeRouteIntelligence, type RouteIntelligence } from "@/lib/route-intelligence";
 import { dataService } from "@/lib/data-service";
+import { locationService } from "@/lib/location-service";
+import { routeService } from "@/lib/route-service";
+import { SafetyMap } from "@/components/safesphere/safety-map";
 import { simulationStore, useSimulationState } from "@/lib/simulation-service";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +54,8 @@ function Guardian() {
   const [selected, setSelected] = useState<DestinationAnalysis | null>(null);
   const [intel, setIntel] = useState<RouteIntelligence | null>(null);
   const [autoAlert, setAutoAlert] = useState(false);
+  const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
   const demo = useSimulationState();
 
   // Hidden simulation scenario: jump straight to a deterministic result.
@@ -72,22 +77,87 @@ function Guardian() {
     simulationStore.setRoute(null);
   }, [demo.route]);
 
-  const analyze = (dest: DestinationAnalysis) => {
+  const analyze = async (dest: any) => {
     setSelected(dest);
     setQuery(dest.name);
     setStep("analyzing");
-    // Route Intelligence Engine — dynamic score from time, activity,
-    // safe zones and Guardian Shield status.
-    const result = computeRouteIntelligence(dest.inputs);
+
+    // 1. Get real location coordinates
+    let loc = null;
+    try {
+      loc = await locationService.getCurrentLocation();
+      if (loc) {
+        setCoords({ latitude: loc.latitude, longitude: loc.longitude });
+      }
+    } catch (err) {
+      console.warn("[guardian] Location retrieval failed:", err);
+    }
+
+    // 2. Fetch OSRM routing
+    const startLat = loc?.latitude ?? 12.9716;
+    const startLon = loc?.longitude ?? 77.5946;
+    const destLat = dest.latitude ?? (loc?.latitude ? loc.latitude + 0.015 : 12.9866);
+    const destLon = dest.longitude ?? (loc?.longitude ? loc.longitude + 0.015 : 77.6096);
+
+    let route = null;
+    try {
+      route = await routeService.getRoute(startLat, startLon, destLat, destLon);
+      if (route) {
+        setRouteCoords(route.geometry);
+      }
+    } catch (err) {
+      console.warn("[guardian] Routing OSRM failed:", err);
+    }
+
+    // 3. Compute Safety score
+    const distanceKm = route?.distance ?? 4.2;
+    const durationSeconds = route?.duration ?? 900;
+
+    const result = computeRouteIntelligence({
+      hour: new Date().getHours(),
+      distance: distanceKm,
+      guardianActive: true,
+      locationAvailable: !!loc,
+      routeAvailable: !!route,
+    });
+
+    // Construct the dynamic destination results object
+    const finalDest = {
+      id: dest.id || "dynamic",
+      name: dest.name,
+      address: dest.address,
+      etaMinutes: Math.round(durationSeconds / 60),
+      distanceKm: Number(distanceKm.toFixed(1)),
+      safetyScore: result.score,
+      risk: result.risk,
+      tone: result.tone,
+      summary: result.explanation,
+      reasons: result.factors.map(f => `${f.label}: ${f.value}`),
+      factors: result.factors,
+      inputs: {
+        guardianActive: true,
+        locationAvailable: !!loc,
+        routeAvailable: !!route,
+        distance: distanceKm,
+      },
+      latitude: destLat,
+      longitude: destLon,
+    } as any;
+
+    setSelected(finalDest);
     setIntel(result);
-    // Persist the calculated journey (no-op in simulation mode / signed-out).
+
+    // 4. Persist journey session in Supabase
     void dataService.startSession({
       destination: dest.name,
       startLocation: dest.address,
       safetyScore: result.score,
       risk: result.risk,
       explanation: result.explanation,
+      latitude: startLat,
+      longitude: startLon,
     });
+
     setTimeout(() => setStep("result"), 1600);
   };
 
@@ -97,12 +167,29 @@ function Guardian() {
     setIntel(null);
     setQuery("");
     setAutoAlert(false);
+    setRouteCoords([]);
   };
 
   return (
     <MobileShell padded={false}>
       <div className="relative flex-1 min-h-[620px]">
-        <MapBackground route={step === "result"} tone={intel?.tone ?? selected?.tone ?? "safe"} />
+        {step === "result" && coords ? (
+          <div className="absolute inset-0 w-full h-full">
+            <SafetyMap
+              latitude={coords.latitude}
+              longitude={coords.longitude}
+              destLatitude={selected?.latitude}
+              destLongitude={selected?.longitude}
+              routeCoordinates={routeCoords}
+              risk={intel?.risk}
+              guardianActive={true}
+              message="Your position"
+              destMessage={selected?.name || "Destination"}
+            />
+          </div>
+        ) : (
+          <MapBackground route={step === "result"} tone={intel?.tone ?? selected?.tone ?? "safe"} />
+        )}
 
         <AnimatePresence mode="wait">
           {step === "input" && (
@@ -126,13 +213,35 @@ function DestinationInput({
 }: {
   query: string;
   setQuery: (v: string) => void;
-  onPick: (d: DestinationAnalysis) => void;
+  onPick: (d: any) => void;
 }) {
-  const results = query.trim()
-    ? destinations.filter((d) =>
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setSuggestions([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await routeService.searchPlaces(query);
+        setSuggestions(res);
+      } catch (err) {
+        console.error("[guardian] searchPlaces error:", err);
+      } finally {
+        setSearching(false);
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const results = suggestions.length > 0
+    ? suggestions
+    : destinations.filter((d) =>
         (d.name + d.address).toLowerCase().includes(query.trim().toLowerCase()),
-      )
-    : destinations;
+      );
 
   return (
     <motion.div

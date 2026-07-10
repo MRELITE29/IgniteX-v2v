@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PhoneFrame } from "@/components/safesphere/phone-frame";
+import { SafeSphereLogo } from "@/components/safesphere/logo";
 import { useAuth } from "@/lib/auth-context";
 
 export const Route = createFileRoute("/auth")({
@@ -111,11 +112,8 @@ function AuthScreen() {
     return (
       <PhoneFrame>
         <div className="flex flex-1 flex-col px-6 pb-8 pt-10">
-          <Link to="/" className="mb-8 flex items-center gap-2">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-glow)]">
-              <ShieldCheck className="h-5 w-5" />
-            </span>
-            <span className="font-display text-lg font-extrabold">SafeSphere</span>
+          <Link to="/" className="mb-8 block">
+            <SafeSphereLogo />
           </Link>
 
           <motion.div
@@ -184,11 +182,8 @@ function AuthScreen() {
     return (
       <PhoneFrame>
         <div className="flex flex-1 flex-col px-6 pb-8 pt-10">
-          <Link to="/" className="mb-8 flex items-center gap-2">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-glow)]">
-              <ShieldCheck className="h-5 w-5" />
-            </span>
-            <span className="font-display text-lg font-extrabold">SafeSphere</span>
+          <Link to="/" className="mb-8 block">
+            <SafeSphereLogo />
           </Link>
 
           <motion.div
@@ -247,11 +242,8 @@ function AuthScreen() {
     return (
       <PhoneFrame>
         <div className="flex flex-1 flex-col px-6 pb-8 pt-10">
-          <Link to="/" className="mb-8 flex items-center gap-2">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-glow)]">
-              <ShieldCheck className="h-5 w-5" />
-            </span>
-            <span className="font-display text-lg font-extrabold">SafeSphere</span>
+          <Link to="/" className="mb-8 block">
+            <SafeSphereLogo />
           </Link>
 
           <motion.div
@@ -296,11 +288,8 @@ function AuthScreen() {
   return (
     <PhoneFrame>
       <div className="flex flex-1 flex-col px-6 pb-8 pt-10">
-        <Link to="/" className="mb-8 flex items-center gap-2">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[var(--shadow-glow)]">
-            <ShieldCheck className="h-5 w-5" />
-          </span>
-          <span className="font-display text-lg font-extrabold">SafeSphere</span>
+        <Link to="/" className="mb-8 block">
+          <SafeSphereLogo />
         </Link>
 
         <motion.div
