@@ -13,6 +13,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { analyzeMessage } from "@/lib/app-data";
 
 export type ThreatLevel = "low" | "medium" | "high";
 export type ThreatCategory =
@@ -34,7 +35,7 @@ const inputSchema = z.object({ text: z.string().trim().min(1).max(4000) });
 
 export const analyzeThreat = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: unknown) => inputSchema.parse(data))
+  .validator((data: unknown) => inputSchema.parse(data))
   .handler(async ({ data, context }): Promise<ThreatAnalysis> => {
     const { supabase, userId } = context;
     const message = data.text;
@@ -49,19 +50,14 @@ export const analyzeThreat = createServerFn({ method: "POST" })
     const toThreat = (score: number): ThreatLevel =>
       score >= 65 ? "high" : score >= 30 ? "medium" : "low";
 
-    // Local heuristic fallback (used if the AI call fails).
+    // Local heuristic fallback (used if the AI call fails) — delegates to the
+    // canonical analyzeMessage utility in app-data.ts to avoid duplication.
     const fallback = (): ThreatAnalysis => {
-      const t = message.toLowerCase();
-      const highWords = ["kill", "follow", "know where", "come out", "or i'll", "threat", "hurt", "share the", "watching", "die"];
-      const medWords = ["urgent", "money", "send", "alone", "meet now", "don't tell", "secret"];
-      let risk = 6;
-      for (const w of highWords) if (t.includes(w)) risk += 32;
-      for (const w of medWords) if (t.includes(w)) risk += 14;
-      risk = clampRisk(Math.min(risk, 98));
-      const threat = toThreat(risk);
+      const result = analyzeMessage(message);
+      const threat = result.threat as ThreatLevel;
       return {
         threat,
-        risk,
+        risk: result.risk,
         categories: threat === "low" ? ["Safe"] : ["Manipulation"],
         explanation:
           threat === "high"
@@ -69,12 +65,7 @@ export const analyzeThreat = createServerFn({ method: "POST" })
             : threat === "medium"
               ? "This message shows possible pressure or manipulation cues."
               : "No significant threat indicators were detected in this message.",
-        action:
-          threat === "high"
-            ? "Do not engage — save evidence and alert a guardian now."
-            : threat === "medium"
-              ? "Stay cautious and keep the conversation on record."
-              : "No threat detected. Safe to respond normally.",
+        action: result.action,
       };
     };
 

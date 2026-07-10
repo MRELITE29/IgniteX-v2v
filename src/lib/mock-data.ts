@@ -63,23 +63,8 @@ export const safePlaces: SafePlace[] = [
   { id: "p5", name: "Central Metro Station", type: "transit", distance: "500 m", open: true },
 ];
 
-export function analyzeMessage(text: string): Omit<ScanResult, "id" | "time"> {
-  const t = text.toLowerCase();
-  const highWords = ["kill", "follow", "know where", "come out", "or i'll", "threat", "hurt", "share the", "watching", "die"];
-  const medWords = ["urgent", "money", "send", "alone", "meet now", "don't tell", "secret"];
-  let risk = 6;
-  for (const w of highWords) if (t.includes(w)) risk += 32;
-  for (const w of medWords) if (t.includes(w)) risk += 14;
-  risk = Math.min(risk, 98);
-  const threat: RiskLevel = risk >= 65 ? "high" : risk >= 30 ? "medium" : "low";
-  const action =
-    threat === "high"
-      ? "High threat. Do not engage — save evidence and alert a guardian now."
-      : threat === "medium"
-        ? "Possible manipulation. Stay cautious and keep the conversation on record."
-        : "No significant threat detected. Safe to respond normally.";
-  return { message: text, threat, risk, action };
-}
+// analyzeMessage is the canonical heuristic in app-data.ts — import from there if needed.
+
 
 export const riskMeta: Record<RiskLevel, { label: string; token: "safe" | "caution" | "danger"; emoji: string }> = {
   low: { label: "Low Risk", token: "safe", emoji: "🟢" },

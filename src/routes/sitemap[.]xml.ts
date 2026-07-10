@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type {} from "@tanstack/react-start";
 
-const BASE_URL = "";
+// Read from VITE_APP_URL env var (set in .env for local dev, hosting provider for production).
+// Falls back to empty string so relative paths still work during local development.
+const BASE_URL = (import.meta.env.VITE_APP_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+
 
 interface SitemapEntry {
   path: string;

@@ -41,10 +41,11 @@ export type { SafetySession, IncidentRecord, ScanResult };
 
 const emptyProfile: Profile = { fullName: "", phone: "", email: "", address: "" };
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// Use getSession() (local read, no network call) instead of getUser() (server round-trip).
+// RLS enforces ownership on the DB side; we just need the UID to scope queries.
 async function currentUserId(): Promise<string | null> {
-  const { data } = await supabase.auth.getUser();
-  return data.user?.id ?? null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user?.id ?? null;
 }
 
 export function getErrorMessage(error: unknown): string {

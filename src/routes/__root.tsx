@@ -10,7 +10,7 @@ import {
 import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
-import { reportLovableError } from "../lib/lovable-error-reporting";
+import { reportError } from "../lib/error-reporting";
 import { AuthProvider } from "../lib/auth-context";
 import { supabase } from "@/integrations/supabase/client";
 import { Toaster } from "@/components/ui/sonner";
@@ -41,7 +41,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   const router = useRouter();
   useEffect(() => {
-    reportLovableError(error, { boundary: "tanstack_root_error_component" });
+    reportError(error, { boundary: "tanstack_root_error_component" });
   }, [error]);
 
   return (
@@ -96,11 +96,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
       { name: "twitter:title", content: "SafeSphere — AI-Powered Women Safety Companion" },
       { name: "twitter:description", content: "SafeSphere turns your phone into an intelligent personal guardian with route intelligence, live safety scoring, and automated emergency response." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/38e4031a-cdc4-4c93-a2bb-d54cc8850134/id-preview-cb73c6cc--6457bf71-3722-4b2a-bf68-fbe4b133e2a0.lovable.app-1783609518907.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/38e4031a-cdc4-4c93-a2bb-d54cc8850134/id-preview-cb73c6cc--6457bf71-3722-4b2a-bf68-fbe4b133e2a0.lovable.app-1783609518907.png" },
     ],
     links: [
       {
