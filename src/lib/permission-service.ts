@@ -11,7 +11,7 @@
 //   - Exposes user-friendly denied messages.
 // ============================================================================
 
-export type PermissionKey = "location" | "camera" | "microphone";
+export type PermissionKey = "location" | "camera" | "microphone" | "notifications";
 export type PermissionStatus = "unknown" | "granted" | "denied" | "prompt";
 
 export interface PermissionResult {
@@ -29,13 +29,15 @@ const DENIED_MESSAGES: Record<PermissionKey, string> = {
     "Camera access is blocked. To enable it, open your browser settings → Site settings → Camera, and allow this site.",
   microphone:
     "Microphone access is blocked. To enable it, open your browser settings → Site settings → Microphone, and allow this site.",
+  notifications:
+    "Notifications are blocked. To enable them, open your browser settings → Site settings → Notifications, and allow this site.",
 };
 
-/** Map from our key to the browser's PermissionDescriptor name. */
 const BROWSER_NAME: Record<PermissionKey, PermissionName> = {
   location: "geolocation",
   camera: "camera",
   microphone: "microphone",
+  notifications: "notifications" as PermissionName,
 };
 
 // ── Persistence helpers ──────────────────────────────────────────────────────
@@ -45,7 +47,7 @@ function loadStored(): Record<PermissionKey, PermissionStatus> {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { location: "unknown", camera: "unknown", microphone: "unknown" };
+  return { location: "unknown", camera: "unknown", microphone: "unknown", notifications: "unknown" };
 }
 
 function saveStatus(key: PermissionKey, status: PermissionStatus) {
@@ -163,14 +165,38 @@ export async function requestMicrophone(): Promise<PermissionResult> {
   }
 }
 
+export async function requestNotifications(): Promise<PermissionResult> {
+  if (typeof Notification === "undefined") {
+    return { status: "denied", deniedMessage: "Notifications are not supported by your browser." };
+  }
+  try {
+    const permission = await Notification.requestPermission();
+    const status = permission === "granted" ? "granted" : permission === "denied" ? "denied" : "unknown";
+    saveStatus("notifications", status);
+    return {
+      status,
+      deniedMessage: status === "denied" ? DENIED_MESSAGES.notifications : undefined,
+    };
+  } catch (err) {
+    saveStatus("notifications", "unknown");
+    return { status: "unknown" };
+  }
+}
+
 /**
- * Requests location + microphone permissions as a batch when Guardian Shield activates.
- * Does NOT request camera — camera is only requested when the user explicitly captures evidence.
+ * Requests location, microphone, camera, and notifications as a batch.
  */
 export async function requestGuardianPermissions(): Promise<{
   location: PermissionResult;
   microphone: PermissionResult;
+  camera: PermissionResult;
+  notifications: PermissionResult;
 }> {
-  const [location, microphone] = await Promise.all([requestLocation(), requestMicrophone()]);
-  return { location, microphone };
+  const [location, microphone, camera, notifications] = await Promise.all([
+    requestLocation(),
+    requestMicrophone(),
+    requestCamera(),
+    requestNotifications(),
+  ]);
+  return { location, microphone, camera, notifications };
 }

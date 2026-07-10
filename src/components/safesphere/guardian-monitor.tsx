@@ -12,9 +12,9 @@ import {
   type PermissionStatus,
 } from "@/lib/permission-service";
 import { useQueryClient } from "@tanstack/react-query";
-import { notificationService } from "@/lib/notification-service";
-import { captureEmergencyEvidence } from "@/lib/evidence-recorder";
 import { locationService } from "@/lib/location-service";
+import { executeEmergencyProtocol } from "@/lib/emergency-protocol";
+import { computeRouteIntelligence } from "@/lib/route-intelligence";
 
 /**
  * Guardian Shield emergency flow:
@@ -28,44 +28,65 @@ import { locationService } from "@/lib/location-service";
  */
 type Phase = "monitoring" | "confirm" | "protocol";
 
-const CONFIRM_SECONDS = 10;
+const CONFIRM_SECONDS = 15;
+const CHECK_INTERVAL = 120000; // 2 minutes (routine check)
+const ENGINE_INTERVAL = 10000; // 10 seconds (continuous health engine)
 
 export function GuardianMonitor({ active }: { active: boolean }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [phase, setPhase] = useState<Phase>("monitoring");
   const [count, setCount] = useState(CONFIRM_SECONDS);
-  const [vapiStatus, setVapiStatus] = useState<"idle" | "calling" | "success" | "failed">("idle");
+  const [locStatus, setLocStatus] = useState<"idle" | "loading" | "success" | "failed">("idle");
+  const [vapiStatus, setVapiStatus] = useState<"idle" | "loading" | "success" | "failed">("idle");
+  const [evidenceStatus, setEvidenceStatus] = useState<"idle" | "loading" | "success" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const checkTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const engineTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Permission state — queried once on mount, re-queried when shield activates.
   const [locationPerm, setLocationPerm] = useState<PermissionStatus>("unknown");
   const [micPerm, setMicPerm] = useState<PermissionStatus>("unknown");
+  const [camPerm, setCamPerm] = useState<PermissionStatus>("unknown");
+  const [notifPerm, setNotifPerm] = useState<PermissionStatus>("unknown");
   const [requestingPerms, setRequestingPerms] = useState(false);
 
   // ── On shield activation: request permissions contextually ────────────────
   useEffect(() => {
     setPhase("monitoring");
     setCount(CONFIRM_SECONDS);
+    setLocStatus("idle");
     setVapiStatus("idle");
+    setEvidenceStatus("idle");
 
     if (!active) return;
+    
+    // Start continuous 2-minute checks
+    checkTimer.current = setInterval(() => {
+      detectRisk();
+    }, CHECK_INTERVAL);
 
     // Check current status before prompting.
     void (async () => {
-      const [loc, mic] = await Promise.all([
+      const [loc, mic, cam, notif] = await Promise.all([
         queryPermission("location"),
         queryPermission("microphone"),
+        queryPermission("camera"),
+        queryPermission("notifications"),
       ]);
       setLocationPerm(loc);
       setMicPerm(mic);
+      setCamPerm(cam);
+      setNotifPerm(notif);
 
-      // Only request if not yet determined.
-      if (loc !== "granted" || mic !== "granted") {
+      // Only request if any of them is not granted.
+      if (loc !== "granted" || mic !== "granted" || cam !== "granted" || notif !== "granted") {
         setRequestingPerms(true);
         const result = await requestGuardianPermissions();
         setLocationPerm(result.location.status);
         setMicPerm(result.microphone.status);
+        setCamPerm(result.camera.status);
+        setNotifPerm(result.notifications.status);
         setRequestingPerms(false);
 
         if (result.location.status === "denied") {
@@ -74,9 +95,76 @@ export function GuardianMonitor({ active }: { active: boolean }) {
         if (result.microphone.status === "denied") {
           toast.warning(result.microphone.deniedMessage ?? "Microphone access denied");
         }
+        if (result.camera.status === "denied") {
+          toast.warning(result.camera.deniedMessage ?? "Camera access denied");
+        }
+        if (result.notifications.status === "denied") {
+          toast.warning(result.notifications.deniedMessage ?? "Notifications denied");
+        }
       }
     })();
-  }, [active]);
+    
+    // Start continuous 10-second Journey Engine
+    engineTimer.current = setInterval(async () => {
+      // Only run engine if monitoring
+      if (phase !== "monitoring") return;
+
+      let loc = null;
+      try {
+        loc = await locationService.getCurrentLocation();
+      } catch (err) {
+        // GPS unavailable
+        detectRisk("GPS signal lost. Are you safe?");
+        return;
+      }
+
+      const session = qc.getQueryData<any>(["active-session"]);
+      if (!session) return; // No active journey
+
+      // 1. Check ETA tolerance (e.g. 5 mins over ETA)
+      // Assuming session was created recently; we'll use a mock creation time if missing.
+      const startTime = session.created_at ? new Date(session.created_at).getTime() : Date.now() - (session.etaMinutes * 60000);
+      const elapsedMs = Date.now() - startTime;
+      const etaMs = (session.etaMinutes || 0) * 60000;
+      const toleranceMs = 5 * 60000;
+
+      if (elapsedMs > etaMs + toleranceMs) {
+        detectRisk("Journey taking longer than expected. Are you safe?");
+        return;
+      }
+
+      // 2. Recalculate safety score
+      const result = computeRouteIntelligence({
+        hour: new Date().getHours(),
+        distance: session.distanceKm || 2, // approximation if not tracked live
+        guardianActive: true,
+        locationAvailable: true,
+        routeAvailable: true,
+      });
+
+      if (result.score < 40) {
+        detectRisk("High risk conditions detected. Are you safe?");
+        return;
+      }
+
+      // 3. Update dashboard cache with rich telemetry
+      qc.setQueryData(["active-session"], {
+        ...session,
+        safetyScore: result.score,
+        risk: result.risk,
+        lastGuardianCheck: Date.now(),
+        nextGuardianCheck: Date.now() + CHECK_INTERVAL,
+        currentJourneyStatus: phase,
+        evidenceStatus,
+        guardianStatus: vapiStatus,
+      });
+    }, ENGINE_INTERVAL);
+
+    return () => {
+      if (checkTimer.current) clearInterval(checkTimer.current);
+      if (engineTimer.current) clearInterval(engineTimer.current);
+    };
+  }, [active, phase]);
 
   // ── Countdown while awaiting user confirmation ────────────────────────────
   useEffect(() => {
@@ -95,83 +183,64 @@ export function GuardianMonitor({ active }: { active: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  const detectRisk = () => {
+  const detectRisk = (msg?: string) => {
+    if (checkTimer.current) clearInterval(checkTimer.current);
     setCount(CONFIRM_SECONDS);
     setPhase("confirm");
-    toast("Risk detected on your route — please confirm you're safe");
+    toast(msg ?? "Safety check: please confirm you're safe");
+    
+    // Sync phase to dashboard
+    qc.setQueryData(["active-session"], (old: any) => old ? { ...old, currentJourneyStatus: "confirm" } : old);
   };
 
   const confirmSafe = () => {
     if (timer.current) clearInterval(timer.current);
     setPhase("monitoring");
     setCount(CONFIRM_SECONDS);
+    setLocStatus("idle");
     setVapiStatus("idle");
+    setEvidenceStatus("idle");
     toast.success("Marked safe — Guardian Shield keeps monitoring 💚");
+    
+    // Sync phase to dashboard
+    qc.setQueryData(["active-session"], (old: any) => old ? { ...old, currentJourneyStatus: "monitoring" } : old);
+    
+    // Restart continuous checks
+    checkTimer.current = setInterval(() => {
+      detectRisk();
+    }, CHECK_INTERVAL);
   };
 
   const escalate = async () => {
     if (timer.current) clearInterval(timer.current);
+    if (checkTimer.current) clearInterval(checkTimer.current);
+    if (engineTimer.current) clearInterval(engineTimer.current);
     setPhase("protocol");
-    setVapiStatus("calling");
+    
+    // Sync phase to dashboard
+    qc.setQueryData(["active-session"], (old: any) => old ? { ...old, currentJourneyStatus: "protocol" } : old);
+    
     toast.error("No response — Emergency Protocol activated 🚨");
 
-    try {
-      // Get latest location coordinates for emergency dispatch
-      let loc = null;
-      try {
-        loc = await locationService.getCurrentLocation();
-      } catch (err) {
-        console.warn("[GuardianMonitor] Geolocation failed during emergency:", err);
-      }
-
-      // 1. Create safety incident (owner-scoped via RLS).
-      const incidentId = await dataService.createIncident({
-        risk: "high",
-        location: "Live route",
-        latitude: loc?.latitude,
-        longitude: loc?.longitude,
-      });
-      
-      if (incidentId) {
-        // 2. Notify guardians (simulated provider adapter)
-        try {
-          const payload = await notificationService.notifyGuardians(
-            incidentId,
-            "Live route",
-            "high",
-            loc?.latitude,
-            loc?.longitude
-          );
-          
-          if (payload && (payload as any).vapiSuccess) {
-            setVapiStatus("success");
-            toast.success("Guardian notified");
-          } else {
-            setVapiStatus("failed");
-            toast.error("Vapi dispatch failed — call was not triggered.");
-          }
-        } catch (err) {
-          setVapiStatus("failed");
-          toast.error("Error occurred while triggering Vapi alerts.");
-        }
-
-        // 3. Start browser evidence recording, upload, and save metadata (background capture)
-        captureEmergencyEvidence(incidentId)
-          .then(() => {
-            qc.invalidateQueries({ queryKey: ["evidence-items"] });
-          })
-          .catch((err) => {
-            console.error("[GuardianMonitor] captureEmergencyEvidence failed:", err);
-          });
-      } else {
-        setVapiStatus("failed");
-        console.warn("[GuardianMonitor] Incident creation returned null ID, skipping recording & notification.");
-      }
-    } catch (err) {
-      setVapiStatus("failed");
-      console.error("[GuardianMonitor] Emergency sequence failed:", err);
-      toast.error("Emergency protocol sequence failed to initialize.");
-    }
+    executeEmergencyProtocol(
+      qc,
+      (state) => {
+        if (state.locStatus) setLocStatus(state.locStatus);
+        if (state.vapiStatus) setVapiStatus(state.vapiStatus);
+        if (state.evidenceStatus) setEvidenceStatus(state.evidenceStatus);
+        
+        // Sync these states to the dashboard dynamically
+        qc.setQueryData(["active-session"], (old: any) => {
+          if (!old) return old;
+          return {
+            ...old,
+            ...(state.vapiStatus && { guardianStatus: state.vapiStatus }),
+            ...(state.evidenceStatus && { evidenceStatus: state.evidenceStatus }),
+          };
+        });
+      },
+      "Live route"
+    );
   };
 
   if (!active) return null;
@@ -216,7 +285,7 @@ export function GuardianMonitor({ active }: { active: boolean }) {
             onClick={detectRisk}
             className="ml-auto rounded-full bg-card px-2.5 py-1 text-[10px] font-bold text-muted-foreground shadow-[var(--shadow-soft)] transition-colors hover:text-foreground"
           >
-            Simulate risk
+            Simulate safety check
           </button>
         </div>
       )}
@@ -243,7 +312,7 @@ export function GuardianMonitor({ active }: { active: boolean }) {
                 </span>
                 <p className="mt-4 text-lg font-extrabold">Are you safe?</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Unusual activity detected on your route. Confirm within{" "}
+                  Guardian Shield check. Confirm within{" "}
                   <span className="font-bold text-foreground">{count}s</span> or the Emergency
                   Protocol activates automatically.
                 </p>
@@ -280,16 +349,22 @@ export function GuardianMonitor({ active }: { active: boolean }) {
                   You didn't respond, so SafeSphere took over.
                 </p>
                 <div className="mt-4 space-y-2 text-left">
-                  {emergencyProtocol.map((step, i) => (
-                    <ProtocolRow
-                      key={step.title}
-                      index={i}
-                      title={step.title}
-                      sub={step.sub}
-                      delay={0.2 + i * 0.35}
-                      vapiStatus={vapiStatus}
-                    />
-                  ))}
+                  {emergencyProtocol.map((step, i) => {
+                    let status = "idle" as any;
+                    if (i === 0) status = locStatus;
+                    if (i === 1) status = vapiStatus;
+                    if (i === 2) status = evidenceStatus;
+                    
+                    return (
+                      <ProtocolRow
+                        key={step.title}
+                        index={i}
+                        title={step.title}
+                        sub={step.sub}
+                        status={status}
+                      />
+                    );
+                  })}
                 </div>
                 <div className="mt-5 space-y-2.5">
                   <Button variant="danger" size="pill" className="w-full" onClick={() => navigate({ to: "/sos" })}>
@@ -314,33 +389,14 @@ function ProtocolRow({
   index,
   title,
   sub,
-  delay,
-  vapiStatus,
+  status,
 }: {
   index: number;
   title: string;
   sub: string;
-  delay: number;
-  vapiStatus: "idle" | "calling" | "success" | "failed";
+  status: "idle" | "loading" | "success" | "failed";
 }) {
-  const [done, setDone] = useState(false);
   const Icon = protocolIcon[index] ?? MapPin;
-
-  useEffect(() => {
-    if (index === 1) {
-      if (vapiStatus === "success") {
-        setDone(true);
-      } else {
-        setDone(false);
-      }
-    } else {
-      const t = setTimeout(() => setDone(true), delay * 1000 + 300);
-      return () => clearTimeout(t);
-    }
-  }, [delay, index, vapiStatus]);
-
-  const showSpinner = index === 1 ? vapiStatus === "calling" || vapiStatus === "idle" : !done;
-  const isFailed = index === 1 && vapiStatus === "failed";
 
   return (
     <div className="flex items-center gap-3 rounded-2xl bg-muted/50 p-3">
@@ -350,20 +406,37 @@ function ProtocolRow({
       <div className="min-w-0 flex-1">
         <p className="text-sm font-bold">{title}</p>
         <p className="truncate text-xs text-muted-foreground">
-          {index === 1 && vapiStatus === "failed" ? "Call dispatch failed" : sub}
+          {index === 1 && status === "failed" ? "Call dispatch failed" : sub}
         </p>
       </div>
-      {isFailed ? (
-        <span className="grid h-6 w-6 place-items-center rounded-full bg-danger text-white text-xs font-bold font-sans">
-          ✕
-        </span>
-      ) : done ? (
-        <span className="grid h-6 w-6 place-items-center rounded-full bg-safe text-safe-foreground">
-          <Check className="h-4 w-4" />
-        </span>
-      ) : showSpinner ? (
-        <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-danger" />
-      ) : null}
+      <AnimatePresence mode="wait">
+        {status === "failed" ? (
+          <motion.span
+            key="fail"
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="grid h-6 w-6 place-items-center rounded-full bg-danger text-white text-xs font-bold font-sans"
+          >
+            ✕
+          </motion.span>
+        ) : status === "success" ? (
+          <motion.span
+            key="check"
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ type: "spring", stiffness: 400, damping: 14 }}
+            className="grid h-6 w-6 place-items-center rounded-full bg-safe text-safe-foreground"
+          >
+            <Check className="h-4 w-4" />
+          </motion.span>
+        ) : (
+          <motion.span
+            key="spin"
+            exit={{ opacity: 0 }}
+            className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-muted border-t-danger"
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ShieldCheck, Navigation, MapPin, LogOut, Home as HomeIcon, Clock, Siren } from "lucide-react";
+import { ShieldCheck, Navigation, MapPin, LogOut, Home as HomeIcon, Clock, Siren, History, Hourglass, Activity, PhoneCall, Video } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -22,6 +22,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 });
 
 function Dashboard() {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [guardian, setGuardian] = useState(true);
   const [gpsStatus, setGpsStatus] = useState<"checking" | "available" | "unavailable">("checking");
   const navigate = useNavigate();
@@ -115,82 +116,127 @@ function Dashboard() {
 
         </div>
 
-        {/* Bottom floating bg-card border border-border shadow-[var(--shadow-soft)] card */}
+        {/* Bottom expandable drawer card */}
         <motion.div
-          initial={{ y: 80, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ type: "spring", stiffness: 170, damping: 22 }}
-          className="bg-card border border-border shadow-[var(--shadow-soft)] absolute inset-x-3 bottom-24 rounded-[2.25rem] p-5"
+          initial="collapsed"
+          animate={isExpanded ? "expanded" : "collapsed"}
+          variants={{
+            expanded: { y: "0%" },
+            collapsed: { y: "calc(100% - 110px)" }
+          }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+          className="bg-card/95 backdrop-blur-xl border-t border-border shadow-2xl absolute inset-x-0 bottom-0 rounded-t-[2.25rem] p-5 pt-2 pointer-events-auto z-20 flex flex-col"
+          style={{ height: "75vh" }}
         >
-          {/* Guardian status header */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <span
-                className={`grid h-11 w-11 place-items-center rounded-2xl transition-all ${
-                  guardian ? "bg-primary text-primary-foreground shadow-[var(--shadow-glow)]" : "bg-muted text-muted-foreground"
-                }`}
-              >
-                <ShieldCheck className="h-6 w-6" />
-              </span>
-              <div>
-                <p className="text-base font-bold leading-tight">
-                  Guardian {guardian ? "Active" : "Off"} {guardian && "🛡️"}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {guardian ? "Monitoring your journey" : "Tap to protect yourself"}
-                </p>
+          {/* Handle */}
+          <div 
+            className="w-full pb-4 pt-2 flex justify-center shrink-0 cursor-pointer"
+            onClick={() => setIsExpanded(!isExpanded)}
+          >
+            <div className="w-12 h-1.5 bg-muted-foreground/30 rounded-full" />
+          </div>
+
+          <div className="flex-1 overflow-y-auto custom-scrollbar pb-6 flex flex-col gap-5">
+            {/* Guardian status header */}
+            <div className="flex items-center justify-between cursor-pointer" onClick={() => !isExpanded && setIsExpanded(true)}>
+              <div className="flex items-center gap-3">
+                <span
+                  className={`grid h-11 w-11 place-items-center rounded-2xl transition-all ${
+                    guardian ? "bg-primary text-primary-foreground shadow-[var(--shadow-glow)]" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  <ShieldCheck className="h-6 w-6" />
+                </span>
+                <div>
+                  <p className="text-base font-bold leading-tight">
+                    Guardian {guardian ? "Active" : "Off"} {guardian && "🛡️"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {guardian ? "Monitoring your journey" : "Tap to protect yourself"}
+                  </p>
+                </div>
+              </div>
+              <div onClick={(e) => e.stopPropagation()}>
+                <Switch
+                  checked={guardian}
+                  onCheckedChange={(v) => {
+                    setGuardian(v);
+                    if (v) setIsExpanded(true);
+                    toast(v ? "Guardian Shield activated 🛡️" : "Guardian Shield paused");
+                  }}
+                />
               </div>
             </div>
-            <Switch
-              checked={guardian}
-              onCheckedChange={(v) => {
-                setGuardian(v);
-                toast(v ? "Guardian Shield activated 🛡️" : "Guardian Shield paused");
-              }}
-            />
-          </div>
 
-          {/* Safety ring + journey stats */}
-          <div className="mt-5 flex items-center gap-5">
-            <SafetyRing score={guardian && activeSession ? activeSession.safetyScore : 0} size={120} strokeWidth={12} tone="safe" />
-            <div className="flex-1 space-y-2">
-              <RiskBadge risk={guardian && activeSession ? activeSession.risk : "low"} />
-              <InfoRow icon={HomeIcon} label="Destination" value={activeSession ? activeSession.destination : "Not active"} />
-              <InfoRow icon={Clock} label="ETA" value={activeSession ? "12 min" : "--"} />
-              <InfoRow icon={Navigation} label="Distance" value={activeSession ? "3.8 km" : "--"} />
+            {/* Safety ring + journey stats */}
+            <div className="flex flex-col md:flex-row items-center gap-5">
+              <div className="mx-auto shrink-0">
+                <SafetyRing score={guardian && activeSession ? activeSession.safetyScore : 0} size={140} strokeWidth={12} tone="safe" />
+              </div>
+              <div className="flex-1 w-full space-y-2">
+                <RiskBadge risk={guardian && activeSession ? activeSession.risk : "low"} />
+                <InfoRow icon={HomeIcon} label="Destination" value={activeSession ? activeSession.destination : "Not active"} />
+                <InfoRow icon={Clock} label="ETA" value={activeSession ? (activeSession.etaMinutes + " min") : "--"} />
+                <InfoRow 
+                  icon={History} 
+                  label="Last Check" 
+                  value={activeSession?.lastGuardianCheck ? new Date(activeSession.lastGuardianCheck).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : "--"} 
+                />
+                <InfoRow 
+                  icon={Hourglass} 
+                  label="Next Check" 
+                  value={activeSession?.nextGuardianCheck ? new Date(activeSession.nextGuardianCheck).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : "--"} 
+                />
+                <InfoRow 
+                  icon={Activity} 
+                  label="Journey Status" 
+                  value={activeSession?.currentJourneyStatus === "protocol" ? "Emergency" : activeSession?.currentJourneyStatus === "confirm" ? "Checking" : "Monitoring"} 
+                />
+                <InfoRow 
+                  icon={PhoneCall} 
+                  label="Guardian Status" 
+                  value={activeSession?.guardianStatus === "success" ? "Notified" : activeSession?.guardianStatus === "failed" ? "Failed" : activeSession?.guardianStatus === "loading" ? "Dispatching" : "Idle"} 
+                />
+                <InfoRow 
+                  icon={Video} 
+                  label="Evidence Status" 
+                  value={activeSession?.evidenceStatus === "success" ? "Vaulted" : activeSession?.evidenceStatus === "failed" ? "Failed" : activeSession?.evidenceStatus === "loading" ? "Recording" : "Idle"} 
+                />
+              </div>
             </div>
-          </div>
 
-          {/* Guardian Shield monitoring → confirmation → emergency protocol flow */}
-          <GuardianMonitor active={guardian} />
+            {/* Guardian Shield monitoring → confirmation → emergency protocol flow */}
+            <GuardianMonitor active={guardian} />
 
-          {/* Action buttons */}
-          <div className="mt-5 space-y-2.5">
-            <Button
-              asChild={guardian}
-              variant="hero"
-              size="pill"
-              className="w-full"
-              onClick={guardian ? undefined : () => {
-                setGuardian(true);
-                toast("Guardian Shield activated 🛡️");
-              }}
-            >
-              {guardian ? (
-                <Link to="/guardian">
-                  <Navigation className="h-5 w-5" /> View live journey
+            {/* Action buttons */}
+            <div className="mt-auto pt-2 space-y-2.5">
+              <Button
+                asChild={guardian}
+                variant="hero"
+                size="pill"
+                className="w-full"
+                onClick={guardian ? undefined : () => {
+                  setGuardian(true);
+                  setIsExpanded(true);
+                  toast("Guardian Shield activated 🛡️");
+                }}
+              >
+                {guardian ? (
+                  <Link to="/guardian">
+                    <Navigation className="h-5 w-5" /> View live journey
+                  </Link>
+                ) : (
+                  <>
+                    <ShieldCheck className="h-5 w-5" /> Activate Guardian Shield
+                  </>
+                )}
+              </Button>
+              <Button asChild variant="danger" size="pill" className="w-full">
+                <Link to="/sos">
+                  <Siren className="h-5 w-5" /> Emergency SOS
                 </Link>
-              ) : (
-                <>
-                  <ShieldCheck className="h-5 w-5" /> Activate Guardian Shield
-                </>
-              )}
-            </Button>
-            <Button asChild variant="danger" size="pill" className="w-full">
-              <Link to="/sos">
-                <Siren className="h-5 w-5" /> Emergency SOS
-              </Link>
-            </Button>
+              </Button>
+            </div>
           </div>
         </motion.div>
       </div>

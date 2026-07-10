@@ -131,7 +131,7 @@ export function SafetyMap({
       <MapContainer
         center={center}
         zoom={15}
-        scrollWheelZoom={false}
+        scrollWheelZoom={true}
         style={{ height: "100%", width: "100%", zIndex: 1 }}
       >
         <TileLayer

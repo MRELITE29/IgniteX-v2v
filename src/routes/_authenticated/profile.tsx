@@ -405,9 +405,8 @@ function ProfileScreen() {
       <div className="bg-card border border-border shadow-[var(--shadow-soft)] grid grid-cols-2 gap-2.5 rounded-[1.6rem] p-4">
         {permissionStatuses.map((perm) => {
           const Icon = permIcon[perm.key];
-          // Use cached permission status (except notifications which is not currently cached)
           const perms = getCachedPermissions();
-          const isGranted = perm.key === "notifications" ? false : perms[perm.key as keyof typeof perms] === "granted";
+          const isGranted = perms[perm.key as keyof typeof perms] === "granted";
           return (
             <div key={perm.key} className="flex items-center gap-2.5 rounded-2xl bg-card/70 p-3">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary/15 text-foreground">
