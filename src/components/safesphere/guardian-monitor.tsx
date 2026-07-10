@@ -35,6 +35,7 @@ export function GuardianMonitor({ active }: { active: boolean }) {
   const qc = useQueryClient();
   const [phase, setPhase] = useState<Phase>("monitoring");
   const [count, setCount] = useState(CONFIRM_SECONDS);
+  const [vapiStatus, setVapiStatus] = useState<"idle" | "calling" | "success" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Permission state — queried once on mount, re-queried when shield activates.
@@ -46,6 +47,7 @@ export function GuardianMonitor({ active }: { active: boolean }) {
   useEffect(() => {
     setPhase("monitoring");
     setCount(CONFIRM_SECONDS);
+    setVapiStatus("idle");
 
     if (!active) return;
 
@@ -103,12 +105,14 @@ export function GuardianMonitor({ active }: { active: boolean }) {
     if (timer.current) clearInterval(timer.current);
     setPhase("monitoring");
     setCount(CONFIRM_SECONDS);
+    setVapiStatus("idle");
     toast.success("Marked safe — Guardian Shield keeps monitoring 💚");
   };
 
   const escalate = async () => {
     if (timer.current) clearInterval(timer.current);
     setPhase("protocol");
+    setVapiStatus("calling");
     toast.error("No response — Emergency Protocol activated 🚨");
 
     try {
@@ -130,13 +134,26 @@ export function GuardianMonitor({ active }: { active: boolean }) {
       
       if (incidentId) {
         // 2. Notify guardians (simulated provider adapter)
-        await notificationService.notifyGuardians(
-          incidentId,
-          "Live route",
-          "high",
-          loc?.latitude,
-          loc?.longitude
-        );
+        try {
+          const payload = await notificationService.notifyGuardians(
+            incidentId,
+            "Live route",
+            "high",
+            loc?.latitude,
+            loc?.longitude
+          );
+          
+          if (payload && (payload as any).vapiSuccess) {
+            setVapiStatus("success");
+            toast.success("Guardian notified");
+          } else {
+            setVapiStatus("failed");
+            toast.error("Vapi dispatch failed — call was not triggered.");
+          }
+        } catch (err) {
+          setVapiStatus("failed");
+          toast.error("Error occurred while triggering Vapi alerts.");
+        }
 
         // 3. Start browser evidence recording, upload, and save metadata (background capture)
         captureEmergencyEvidence(incidentId)
@@ -147,9 +164,11 @@ export function GuardianMonitor({ active }: { active: boolean }) {
             console.error("[GuardianMonitor] captureEmergencyEvidence failed:", err);
           });
       } else {
+        setVapiStatus("failed");
         console.warn("[GuardianMonitor] Incident creation returned null ID, skipping recording & notification.");
       }
     } catch (err) {
+      setVapiStatus("failed");
       console.error("[GuardianMonitor] Emergency sequence failed:", err);
       toast.error("Emergency protocol sequence failed to initialize.");
     }
@@ -262,7 +281,14 @@ export function GuardianMonitor({ active }: { active: boolean }) {
                 </p>
                 <div className="mt-4 space-y-2 text-left">
                   {emergencyProtocol.map((step, i) => (
-                    <ProtocolRow key={step.title} index={i} title={step.title} sub={step.sub} delay={0.2 + i * 0.35} />
+                    <ProtocolRow
+                      key={step.title}
+                      index={i}
+                      title={step.title}
+                      sub={step.sub}
+                      delay={0.2 + i * 0.35}
+                      vapiStatus={vapiStatus}
+                    />
                   ))}
                 </div>
                 <div className="mt-5 space-y-2.5">
@@ -284,13 +310,38 @@ export function GuardianMonitor({ active }: { active: boolean }) {
 
 const protocolIcon = [MapPin, Users, Lock] as const;
 
-function ProtocolRow({ index, title, sub, delay }: { index: number; title: string; sub: string; delay: number }) {
+function ProtocolRow({
+  index,
+  title,
+  sub,
+  delay,
+  vapiStatus,
+}: {
+  index: number;
+  title: string;
+  sub: string;
+  delay: number;
+  vapiStatus: "idle" | "calling" | "success" | "failed";
+}) {
   const [done, setDone] = useState(false);
   const Icon = protocolIcon[index] ?? MapPin;
+
   useEffect(() => {
-    const t = setTimeout(() => setDone(true), delay * 1000 + 300);
-    return () => clearTimeout(t);
-  }, [delay]);
+    if (index === 1) {
+      if (vapiStatus === "success") {
+        setDone(true);
+      } else {
+        setDone(false);
+      }
+    } else {
+      const t = setTimeout(() => setDone(true), delay * 1000 + 300);
+      return () => clearTimeout(t);
+    }
+  }, [delay, index, vapiStatus]);
+
+  const showSpinner = index === 1 ? vapiStatus === "calling" || vapiStatus === "idle" : !done;
+  const isFailed = index === 1 && vapiStatus === "failed";
+
   return (
     <div className="flex items-center gap-3 rounded-2xl bg-muted/50 p-3">
       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-danger/10 text-danger">
@@ -298,15 +349,21 @@ function ProtocolRow({ index, title, sub, delay }: { index: number; title: strin
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-bold">{title}</p>
-        <p className="truncate text-xs text-muted-foreground">{sub}</p>
+        <p className="truncate text-xs text-muted-foreground">
+          {index === 1 && vapiStatus === "failed" ? "Call dispatch failed" : sub}
+        </p>
       </div>
-      {done ? (
+      {isFailed ? (
+        <span className="grid h-6 w-6 place-items-center rounded-full bg-danger text-white text-xs font-bold font-sans">
+          ✕
+        </span>
+      ) : done ? (
         <span className="grid h-6 w-6 place-items-center rounded-full bg-safe text-safe-foreground">
           <Check className="h-4 w-4" />
         </span>
-      ) : (
+      ) : showSpinner ? (
         <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-danger" />
-      )}
+      ) : null}
     </div>
   );
 }

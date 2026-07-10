@@ -7,6 +7,11 @@ import { Button } from "@/components/ui/button";
 import { PhoneFrame } from "@/components/safesphere/phone-frame";
 import { useQueryClient } from "@tanstack/react-query";
 import { type Profile, type GuardianContact } from "@/lib/data-service";
+import { dataService } from "@/lib/data-service";
+import { notificationService } from "@/lib/notification-service";
+import { locationService } from "@/lib/location-service";
+import { captureEmergencyEvidence } from "@/lib/evidence-recorder";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/sos")({
   head: () => ({ meta: [{ title: "Emergency SOS — SafeSphere" }] }),
@@ -25,13 +30,76 @@ function SOS() {
   const profile = qc.getQueryData<Profile>(["profile"]);
   const guardians = qc.getQueryData<GuardianContact[]>(["guardians"]) ?? [];
 
-  const emergencyActions: { icon: LucideIcon; title: string; sub: string }[] = [
-    { icon: MapPin, title: "Location shared", sub: profile?.address || "Live location" },
-    { icon: Users, title: "Guardians notified", sub: `${guardians.length} contacts alerted` },
-    { icon: Lock, title: "Evidence vault activated", sub: "Audio & location recording" },
+  const [locStatus, setLocStatus] = useState<"idle" | "loading" | "success" | "failed">("idle");
+  const [vapiStatus, setVapiStatus] = useState<"idle" | "loading" | "success" | "failed">("idle");
+  const [evidenceStatus, setEvidenceStatus] = useState<"idle" | "loading" | "success" | "failed">("idle");
+
+  const emergencyActions = [
+    { icon: MapPin, title: "Location shared", sub: profile?.address || "Live location", status: locStatus },
+    { icon: Users, title: "Guardians notified", sub: `${guardians.length} contacts alerted`, status: vapiStatus },
+    { icon: Lock, title: "Evidence vault activated", sub: "Audio & location recording", status: evidenceStatus },
   ];
 
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const executeEmergency = async () => {
+    setPhase("active");
+    setLocStatus("loading");
+    setVapiStatus("loading");
+    setEvidenceStatus("loading");
+
+    try {
+      let loc = null;
+      try {
+        loc = await locationService.getCurrentLocation();
+        setLocStatus("success");
+      } catch (err) {
+        console.warn("[SOS] Geolocation failed:", err);
+        setLocStatus("failed");
+      }
+
+      const incidentId = await dataService.createIncident({
+        risk: "high",
+        location: "Manual SOS",
+        latitude: loc?.latitude,
+        longitude: loc?.longitude,
+      });
+
+      if (incidentId) {
+        try {
+          const payload = await notificationService.notifyGuardians(
+            incidentId,
+            "Manual SOS",
+            "high",
+            loc?.latitude,
+            loc?.longitude
+          );
+          if (payload && (payload as any).vapiSuccess) {
+            setVapiStatus("success");
+          } else {
+            setVapiStatus("failed");
+          }
+        } catch (err) {
+          setVapiStatus("failed");
+        }
+
+        captureEmergencyEvidence(incidentId)
+          .then(() => {
+            setEvidenceStatus("success");
+            qc.invalidateQueries({ queryKey: ["evidence-items"] });
+          })
+          .catch(() => setEvidenceStatus("failed"));
+      } else {
+        setVapiStatus("failed");
+        setEvidenceStatus("failed");
+      }
+    } catch (err) {
+      toast.error("SOS pipeline initialization failed.");
+      setLocStatus("failed");
+      setVapiStatus("failed");
+      setEvidenceStatus("failed");
+    }
+  };
 
   useEffect(() => {
     if (phase !== "countdown") return;
@@ -39,13 +107,14 @@ function SOS() {
       setCount((c) => {
         if (c <= 1) {
           clearInterval(timer.current!);
-          setPhase("active");
+          executeEmergency();
           return 0;
         }
         return c - 1;
       });
     }, 1000);
     return () => clearInterval(timer.current!);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
   const cancel = () => {
@@ -146,7 +215,7 @@ function SOS() {
 
               <div className="bg-card border border-border mt-8 w-full space-y-2.5 rounded-[1.6rem] p-3 text-left shadow-[var(--shadow-soft)]">
                 {emergencyActions.map((a, i) => (
-                  <ActionRow key={a.title} icon={a.icon} title={a.title} sub={a.sub} delay={0.4 + i * 0.5} />
+                  <ActionRow key={a.title} icon={a.icon} title={a.title} sub={a.sub} delay={0.4 + i * 0.5} status={a.status as any} />
                 ))}
               </div>
 
@@ -171,13 +240,7 @@ function SOS() {
   );
 }
 
-function ActionRow({ icon: Icon, title, sub, delay }: { icon: LucideIcon; title: string; sub: string; delay: number }) {
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setDone(true), delay * 1000 + 350);
-    return () => clearTimeout(t);
-  }, [delay]);
-
+function ActionRow({ icon: Icon, title, sub, delay, status }: { icon: LucideIcon; title: string; sub: string; delay: number; status: "idle" | "loading" | "success" | "failed" }) {
   return (
     <motion.div
       initial={{ opacity: 0, x: -16 }}
@@ -193,7 +256,16 @@ function ActionRow({ icon: Icon, title, sub, delay }: { icon: LucideIcon; title:
         <p className="truncate text-xs text-muted-foreground">{sub}</p>
       </div>
       <AnimatePresence mode="wait">
-        {done ? (
+        {status === "failed" ? (
+          <motion.span
+            key="fail"
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="grid h-6 w-6 place-items-center rounded-full bg-danger text-white text-xs font-bold font-sans"
+          >
+            ✕
+          </motion.span>
+        ) : status === "success" ? (
           <motion.span
             key="check"
             initial={{ scale: 0, opacity: 0 }}

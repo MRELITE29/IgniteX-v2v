@@ -12,6 +12,7 @@ export interface EmergencyAlertPayload {
   latitude?: number;
   longitude?: number;
   mapsLink?: string;
+  vapiSuccess?: boolean;
 }
 
 export const notificationService = {
@@ -70,8 +71,9 @@ export const notificationService = {
     console.groupEnd();
 
     // Trigger the emergency alert adapter pipeline
-    await notificationService.sendEmergencyAlert(payload, guardians);
-
+    const vapiSuccess = await notificationService.sendEmergencyAlert(payload, guardians);
+    payload.vapiSuccess = vapiSuccess;
+ 
     return payload;
   },
 
@@ -82,7 +84,7 @@ export const notificationService = {
   sendEmergencyAlert: async (
     payload: EmergencyAlertPayload,
     guardians: any[]
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // Get current user's profile details to pass to Vapi
     let userName = "A SafeSphere user";
     try {
@@ -94,68 +96,50 @@ export const notificationService = {
       console.warn("[notificationService] Failed to load user profile name:", err);
     }
 
+    let anyVapiSuccess = false;
+
     // Trigger outbound Vapi AI voice call for each guardian contact with a phone number
     for (const guardian of guardians) {
-      if (guardian.phone) {
-        try {
-          console.info(`[notificationService] Triggering Vapi AI call to ${guardian.name} at ${guardian.phone}...`);
-          await triggerVapiCall({
-            data: {
-              userName,
-              guardianPhone: guardian.phone,
-              riskLevel: payload.riskLevel,
-              location: payload.location,
-            }
-          });
-          console.info(`[notificationService] Vapi AI call successfully dispatched for ${guardian.name}`);
-        } catch (err) {
-          console.error(`[notificationService] Vapi AI call failed for ${guardian.name}:`, err);
-        }
+      if (!guardian.phone) {
+        console.warn(`[notificationService] Skipping ${guardian.name} — no phone number.`);
+        continue;
       }
+
+      // Normalize phone to E.164 (strip spaces/dashes)
+      const normalizedPhone = guardian.phone.replace(/[\s\-()]/g, "");
+      if (!/^\+\d{7,15}$/.test(normalizedPhone)) {
+        console.error(`[notificationService] Invalid E.164 phone for ${guardian.name}: "${guardian.phone}" → "${normalizedPhone}"`);
+        continue;
+      }
+
+      console.info("======== VAPI DISPATCH START ========");
+      console.info("Guardian Name:", guardian.name);
+      console.info("Guardian Phone (raw):", guardian.phone);
+      console.info("Guardian Phone (E.164):", normalizedPhone);
+      console.info("Risk Level:", payload.riskLevel);
+      console.info("Location:", payload.mapsLink || payload.location);
+
+      try {
+        const res = await triggerVapiCall({
+          data: {
+            userName,
+            guardianPhone: normalizedPhone,
+            riskLevel: payload.riskLevel,
+            location: payload.mapsLink || payload.location,
+          }
+        });
+        if (res && res.success) {
+          anyVapiSuccess = true;
+          console.info(`[notificationService] ✅ Vapi call SUCCEEDED for ${guardian.name}`);
+        } else {
+          console.error(`[notificationService] ❌ Vapi returned falsy result for ${guardian.name}:`, res);
+        }
+      } catch (err: any) {
+        console.error(`[notificationService] ❌ Vapi call FAILED for ${guardian.name}:`, err?.message || err);
+      }
+      console.info("======== VAPI DISPATCH END ========");
     }
 
-    // Simulate brief network delay
-    await new Promise((resolve) => setTimeout(resolve, 800));
-
-    console.info("[notificationService] Production messaging adapters prepared:");
-
-    // 1. Twilio SMS Integration Stub
-    console.info("  [TODO: Twilio SMS Adapter]");
-    console.info(
-      "    // Example implementation:\n" +
-      "    // const client = require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);\n" +
-      "    // for (const guardian of guardians) {\n" +
-      "    //   if (guardian.phone) {\n" +
-      "    //     await client.messages.create({\n" +
-      "    //       body: `SafeSphere EMERGENCY: User needs assistance. Incident details: ${payload.location}. Link: https://safesphere.app/incidents/${payload.incidentId}`,\n" +
-      "    //       to: guardian.phone,\n" +
-      "    //       from: process.env.TWILIO_PHONE_NUMBER\n" +
-      "    //     });\n" +
-      "    //   }\n" +
-      "    // }"
-    );
-
-    // 2. WhatsApp Business API Integration Stub
-    console.info("  [TODO: WhatsApp Business API Adapter]");
-    console.info(
-      "    // Example implementation:\n" +
-      "    // await fetch(`https://graph.facebook.com/v17.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {\n" +
-      "    //   method: 'POST',\n" +
-      "    //   headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },\n" +
-      "    //   body: JSON.stringify({ messaging_product: 'whatsapp', to: guardian.phone, type: 'template', template: { name: 'emergency_alert' } })\n" +
-      "    // });"
-    );
-
-    // 3. Email Integration Stub (e.g. Resend, Sendgrid)
-    console.info("  [TODO: Email Notification Adapter]");
-    console.info(
-      "    // Example implementation:\n" +
-      "    // await resend.emails.send({\n" +
-      "    //   from: 'emergency@safesphere.app',\n" +
-      "    //   to: guardian.email || 'guardian@example.com',\n" +
-      "    //   subject: '🚨 SafeSphere Emergency Notification',\n" +
-      "    //   html: `<p>A SafeSphere user has triggered an emergency alert. Location: ${payload.location}</p>`\n" +
-      "    // });"
-    );
+    return anyVapiSuccess;
   },
 };

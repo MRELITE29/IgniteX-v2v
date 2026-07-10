@@ -193,21 +193,27 @@ export const dataService = {
   addGuardianContact: async (input: { name: string; role: string; phone: string }): Promise<void> => {
     const uid = await currentUserId();
     if (!uid) return;
+    const formattedPhone = input.phone.trim().replace(/\s+/g, "");
     const { error } = await db.from("guardian_contacts").insert({
       user_id: uid,
       name: input.name,
       relationship: input.role,
-      phone: input.phone,
+      phone: formattedPhone,
     });
     if (error) throw error;
   },
 
-  updateGuardianContact: async (id: string, input: { name: string; role: string }): Promise<void> => {
+  updateGuardianContact: async (id: string, input: { name: string; role: string; phone?: string }): Promise<void> => {
     const uid = await currentUserId();
     if (!uid) return;
+    const formattedPhone = input.phone ? input.phone.trim().replace(/\s+/g, "") : undefined;
     const { error } = await db
       .from("guardian_contacts")
-      .update({ name: input.name, relationship: input.role })
+      .update({
+        name: input.name,
+        relationship: input.role,
+        phone: formattedPhone,
+      })
       .eq("id", id)
       .eq("user_id", uid);
     if (error) throw error;

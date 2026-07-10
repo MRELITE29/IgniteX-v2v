@@ -100,6 +100,7 @@ function ProfileScreen() {
       dataService.updateGuardianContact(editingId!, {
         name: form.name.trim(),
         role: form.relation.trim() || "Trusted Guardian",
+        phone: form.phone.trim(),
       }),
     onSuccess: () => {
       toast.success("Guardian updated");
@@ -285,7 +286,7 @@ function ProfileScreen() {
                 <button
                   onClick={() => {
                     setEditingId(c.id);
-                    setForm({ name: c.name, relation: c.role, phone: "" });
+                    setForm({ name: c.name, relation: c.role, phone: c.phone || "" });
                     setAdding(true);
                   }}
                   className="grid h-8 w-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"

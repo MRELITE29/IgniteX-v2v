@@ -22,39 +22,109 @@ export const routeService = {
   /**
    * Translates text search queries into geographical coordinates using OSM Nominatim.
    */
-  searchPlaces: async (query: string): Promise<SearchSuggestion[]> => {
+  searchPlaces: async (
+    query: string,
+    userLat?: number,
+    userLon?: number
+  ): Promise<SearchSuggestion[]> => {
     if (!query.trim()) return [];
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&addressdetails=1`;
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent": "SafeSphere-App/1.0 (contact@safesphere.app)",
-        },
-      });
 
-      if (!res.ok) throw new Error(`Nominatim request failed: ${res.status}`);
-      const data = await res.json();
+    let data: any[] = [];
+    
+    // 1. Try bounded search if user coordinates are available
+    if (userLat !== undefined && userLon !== undefined) {
+      try {
+        const offset = 0.25; // ~25km bounding window around active location coordinates
+        const left = userLon - offset;
+        const right = userLon + offset;
+        const bottom = userLat - offset;
+        const top = userLat + offset;
 
-      return data.map((item: any) => {
-        const addressParts = [];
-        if (item.address.road) addressParts.push(item.address.road);
-        if (item.address.suburb) addressParts.push(item.address.suburb);
-        if (item.address.city || item.address.town || item.address.village) {
-          addressParts.push(item.address.city || item.address.town || item.address.village);
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+          query
+        )}&format=json&limit=10&addressdetails=1&countrycodes=in&viewbox=${left},${top},${right},${bottom}&bounded=1`;
+
+        const res = await fetch(url, {
+          headers: {
+            "User-Agent": "SafeSphere-App/1.0 (contact@safesphere.app)",
+          },
+        });
+
+        if (res.ok) {
+          data = await res.json();
         }
-        if (item.address.country) addressParts.push(item.address.country);
-
-        return {
-          name: item.name || item.display_name.split(",")[0],
-          address: addressParts.join(", ") || item.display_name,
-          latitude: parseFloat(item.lat),
-          longitude: parseFloat(item.lon),
-        };
-      });
-    } catch (err) {
-      console.error("[routeService] searchPlaces Nominatim error:", err);
-      return [];
+      } catch {
+        // Fallback to unbounded
+      }
     }
+
+    // 2. Unbounded search if bounded returned nothing or was skipped
+    if (!data || data.length === 0) {
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+          query
+        )}&format=json&limit=10&addressdetails=1&countrycodes=in`;
+
+        const res = await fetch(url, {
+          headers: {
+            "User-Agent": "SafeSphere-App/1.0 (contact@safesphere.app)",
+          },
+        });
+
+        if (res.ok) {
+          data = await res.json();
+        }
+      } catch {
+        return [];
+      }
+    }
+
+    if (!data || data.length === 0) return [];
+
+    // 3. Map and sort results based on: (1) proximity to user coordinates, (2) Nominatim importance
+    const suggestions = data.map((item: any) => {
+      const itemLat = parseFloat(item.lat);
+      const itemLon = parseFloat(item.lon);
+
+      let distance = Infinity;
+      if (userLat !== undefined && userLon !== undefined) {
+        // Euclidean distance squared is perfectly fine for sorting
+        distance = (itemLat - userLat) ** 2 + (itemLon - userLon) ** 2;
+      }
+
+      const importance = item.importance ? parseFloat(item.importance) : 0;
+
+      const addressParts = [];
+      if (item.address.road) addressParts.push(item.address.road);
+      if (item.address.suburb) addressParts.push(item.address.suburb);
+      if (item.address.city || item.address.town || item.address.village) {
+        addressParts.push(item.address.city || item.address.town || item.address.village);
+      }
+      if (item.address.country) addressParts.push(item.address.country);
+
+      return {
+        name: item.name || item.display_name.split(",")[0],
+        address: addressParts.join(", ") || item.display_name,
+        latitude: itemLat,
+        longitude: itemLon,
+        distance,
+        importance,
+      };
+    });
+
+    suggestions.sort((a, b) => {
+      if (a.distance !== b.distance) {
+        return a.distance - b.distance;
+      }
+      return b.importance - a.importance;
+    });
+
+    return suggestions.map((s) => ({
+      name: s.name,
+      address: s.address,
+      latitude: s.latitude,
+      longitude: s.longitude,
+    }));
   },
 
   /**

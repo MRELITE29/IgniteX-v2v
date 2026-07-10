@@ -226,10 +226,11 @@ function DestinationInput({
     const timer = setTimeout(async () => {
       setSearching(true);
       try {
-        const res = await routeService.searchPlaces(query);
+        const loc = await locationService.getCurrentLocationIfGranted();
+        const res = await routeService.searchPlaces(query, loc?.latitude, loc?.longitude);
         setSuggestions(res);
-      } catch (err) {
-        console.error("[guardian] searchPlaces error:", err);
+      } catch {
+        // Fallback gracefully
       } finally {
         setSearching(false);
       }

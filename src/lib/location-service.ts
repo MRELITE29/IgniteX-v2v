@@ -52,4 +52,44 @@ export const locationService = {
       );
     });
   },
+
+  /**
+   * Retrieves current location only if permission has already been granted.
+   * Never prompts for permission.
+   */
+  getCurrentLocationIfGranted: async (): Promise<LocationData | null> => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      return null;
+    }
+
+    try {
+      const status = await queryPermission("location");
+      if (status !== "granted") {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            timestamp: position.timestamp,
+          });
+        },
+        () => {
+          resolve(null);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 4000,
+          maximumAge: 60000,
+        }
+      );
+    });
+  },
 };
