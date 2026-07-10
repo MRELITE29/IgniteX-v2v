@@ -1,0 +1,185 @@
+import { useState } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { motion } from "motion/react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ShieldCheck, Navigation, MapPin, LogOut, Home as HomeIcon, Clock, Siren } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { MobileShell } from "@/components/safesphere/mobile-shell";
+import { MapBackground } from "@/components/safesphere/map-background";
+import { SafetyRing } from "@/components/safesphere/safety-ring";
+import { RiskBadge } from "@/components/safesphere/risk-badge";
+import { GuardianMonitor } from "@/components/safesphere/guardian-monitor";
+import { useAuth } from "@/lib/auth-context";
+import { dataService } from "@/lib/data-service";
+
+
+export const Route = createFileRoute("/_authenticated/dashboard")({
+  head: () => ({ meta: [{ title: "Dashboard — SafeSphere" }] }),
+  component: Dashboard,
+});
+
+function Dashboard() {
+  const [guardian, setGuardian] = useState(true);
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const { signOut } = useAuth();
+  const profileQuery = useQuery({ queryKey: ["profile"], queryFn: dataService.getProfile });
+
+  const activeSessionQuery = useQuery({ queryKey: ["active-session"], queryFn: dataService.getActiveSession });
+  const activeSession = activeSessionQuery.data;
+
+  const displayName = (profileQuery.data?.fullName || "User").split(" ")[0];
+  const initials =
+    (profileQuery.data?.fullName || "User")
+      .trim()
+      .split(/\s+/)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "U";
+
+  const handleSignOut = async () => {
+    await qc.cancelQueries();
+    qc.clear();
+    await signOut();
+    navigate({ to: "/auth", replace: true });
+  };
+
+  return (
+    <MobileShell padded={false}>
+      <div className="relative flex-1 min-h-[620px]">
+        <MapBackground route={guardian} tone="safe" />
+
+        {/* Live location marker with sharing-style rings */}
+        <div className="pointer-events-none absolute left-1/2 top-[38%] -translate-x-1/2 -translate-y-1/2">
+          <div className="relative grid h-4 w-4 place-items-center">
+            <span className="absolute h-4 w-4 rounded-full bg-primary shadow-[var(--shadow-glow)]" />
+            <span className="absolute h-12 w-12 rounded-full border border-primary/40 pulse-ring" />
+            <span className="absolute h-12 w-12 rounded-full border border-primary/30 pulse-ring [animation-delay:1.2s]" />
+          </div>
+        </div>
+
+        {/* Top status bar */}
+        <div className="absolute inset-x-0 top-0 px-5 pt-7">
+          <div className="bg-card border border-border shadow-[var(--shadow-soft)] flex items-center gap-3 rounded-[1.6rem] p-3">
+            <Link to="/profile" className="grid h-11 w-11 place-items-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
+              {initials}
+            </Link>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold leading-tight">Hi, {displayName} 👋</p>
+              <p className="flex items-center gap-1 truncate text-xs text-muted-foreground">
+                <MapPin className="h-3 w-3" /> {profileQuery.data?.address || "Location not set"}
+              </p>
+            </div>
+            <button
+              onClick={handleSignOut}
+              aria-label="Sign out"
+              className="grid h-10 w-10 place-items-center rounded-full bg-card text-foreground shadow-[var(--shadow-soft)] transition-colors hover:text-danger"
+            >
+              <LogOut className="h-5 w-5" />
+            </button>
+          </div>
+
+        </div>
+
+        {/* Bottom floating bg-card border border-border shadow-[var(--shadow-soft)] card */}
+        <motion.div
+          initial={{ y: 80, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 170, damping: 22 }}
+          className="bg-card border border-border shadow-[var(--shadow-soft)] absolute inset-x-3 bottom-24 rounded-[2.25rem] p-5"
+        >
+          {/* Guardian status header */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span
+                className={`grid h-11 w-11 place-items-center rounded-2xl transition-all ${
+                  guardian ? "bg-primary text-primary-foreground shadow-[var(--shadow-glow)]" : "bg-muted text-muted-foreground"
+                }`}
+              >
+                <ShieldCheck className="h-6 w-6" />
+              </span>
+              <div>
+                <p className="text-base font-bold leading-tight">
+                  Guardian {guardian ? "Active" : "Off"} {guardian && "🛡️"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {guardian ? "Monitoring your journey" : "Tap to protect yourself"}
+                </p>
+              </div>
+            </div>
+            <Switch
+              checked={guardian}
+              onCheckedChange={(v) => {
+                setGuardian(v);
+                toast(v ? "Guardian Shield activated 🛡️" : "Guardian Shield paused");
+              }}
+            />
+          </div>
+
+          {/* Safety ring + journey stats */}
+          <div className="mt-5 flex items-center gap-5">
+            <SafetyRing score={guardian && activeSession ? activeSession.safetyScore : 0} size={120} strokeWidth={12} tone="safe" />
+            <div className="flex-1 space-y-2.5">
+              <RiskBadge risk={guardian && activeSession ? activeSession.risk : "low"} />
+              <InfoRow icon={HomeIcon} label="Destination" value={activeSession ? activeSession.destination : "Not active"} />
+              <InfoRow icon={Clock} label="ETA" value={activeSession ? "Calculating…" : "--"} />
+            </div>
+          </div>
+
+          {/* Guardian Shield monitoring → confirmation → emergency protocol flow */}
+          <GuardianMonitor active={guardian} />
+
+          {/* Action buttons */}
+          <div className="mt-5 space-y-2.5">
+            <Button
+              asChild={guardian}
+              variant="hero"
+              size="pill"
+              className="w-full"
+              onClick={guardian ? undefined : () => {
+                setGuardian(true);
+                toast("Guardian Shield activated 🛡️");
+              }}
+            >
+              {guardian ? (
+                <Link to="/guardian">
+                  <Navigation className="h-5 w-5" /> View live journey
+                </Link>
+              ) : (
+                <>
+                  <ShieldCheck className="h-5 w-5" /> Activate Guardian Shield
+                </>
+              )}
+            </Button>
+            <Button asChild variant="danger" size="pill" className="w-full">
+              <Link to="/sos">
+                <Siren className="h-5 w-5" /> Emergency SOS
+              </Link>
+            </Button>
+          </div>
+        </motion.div>
+      </div>
+    </MobileShell>
+  );
+}
+
+function InfoRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof HomeIcon;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl bg-card/70 px-3 py-2">
+      <Icon className="h-4 w-4 text-muted-foreground" />
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="ml-auto text-sm font-bold">{value}</span>
+    </div>
+  );
+}

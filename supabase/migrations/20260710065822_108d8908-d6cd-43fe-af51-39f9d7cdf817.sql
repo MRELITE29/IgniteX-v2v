@@ -1,0 +1,1 @@
+ALTER TABLE public.safety_sessions ADD COLUMN IF NOT EXISTS explanation text;
